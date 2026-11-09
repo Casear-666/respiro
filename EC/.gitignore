@@ -1,0 +1,8 @@
+node_modules
+dist
+.env.local
+release/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+artifacts/

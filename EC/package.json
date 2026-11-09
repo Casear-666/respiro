@@ -1,0 +1,72 @@
+{
+  "name": "energy-aware-calendar",
+  "private": true,
+  "version": "2.0.1",
+  "description": "精力日历 — 让时间，留有余地。离线优先的个人桌面日历。",
+  "author": "Energy Calendar",
+  "main": "desktop/main.cjs",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/desktop-dev.js",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start:offline": "electron .",
+    "test": "node --test tests/native/*.test.js",
+    "test:native": "node --test tests/native/*.test.js",
+    "desktop": "node scripts/desktop-dev.js",
+    "desktop:preview": "npm run build && electron .",
+    "desktop:pack": "npm run build && electron-builder --win --x64 --dir",
+    "desktop:dist": "npm run build && electron-builder --win nsis --x64",
+    "desktop:smoke": "electron . --smoke-test"
+  },
+  "devDependencies": {
+    "@fullcalendar/core": "^6.1.20",
+    "@fullcalendar/daygrid": "^6.1.20",
+    "@fullcalendar/interaction": "^6.1.20",
+    "@fullcalendar/react": "^6.1.20",
+    "@fullcalendar/timegrid": "^6.1.20",
+    "@testing-library/react": "^16.2.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "electron": "44.9.1",
+    "electron-builder": "26.15.3",
+    "framer-motion": "^12.40.0",
+    "jsdom": "^26.0.0",
+    "lucide-react": "^1.17.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "sonner": "^2.0.7",
+    "vite": "^8.0.12"
+  },
+  "build": {
+    "appId": "com.energycalendar.desktop",
+    "productName": "精力日历",
+    "directories": {
+      "output": "release",
+      "buildResources": "desktop/assets"
+    },
+    "files": [
+      "dist/**/*",
+      "desktop/**/*",
+      "shared/**/*",
+      "package.json",
+      "!node_modules/**/*"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "win": {
+      "target": "nsis",
+      "icon": "desktop/assets/icon.ico",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "EnergyCalendar-${version}-Setup.${ext}"
+    }
+  }
+}
