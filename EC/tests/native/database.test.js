@@ -190,3 +190,10 @@ test("unchanged writes are skipped while edits and deletions still persist", () 
       assert.deepEqual(db.list(), []);
     });
   }));
+test("confirmBeforeDelete preference round-trips through settings storage", () =>
+  withDatabase((db) => {
+    db.setSettings({ confirmBeforeDelete: false });
+    assert.equal(db.getSettings().confirmBeforeDelete, false);
+    db.setSettings({ confirmBeforeDelete: true });
+    assert.equal(db.getSettings().confirmBeforeDelete, true);
+  }));

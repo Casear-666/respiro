@@ -1,6 +1,8 @@
 node_modules
 dist
 .env.local
+.env.server
+data/
 release/
 *.sqlite
 *.sqlite-shm

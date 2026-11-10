@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { repository, isDesktop } from "./repository";
+import { repository, isDesktop, isServer } from "./repository";
 import {
   DEFAULT_SETTINGS,
   normalizeSettings,
@@ -83,7 +83,7 @@ export function usePlanner() {
         failure.current = error;
         if (seq === sequence.current) {
           setStatus("error");
-          toast.error("尚未保存到本机", {
+          toast.error(isServer ? "尚未保存到服务器" : "尚未保存到本机", {
             description: "数据仍在当前窗口中，请点击底部的“重试保存”。",
           });
         }

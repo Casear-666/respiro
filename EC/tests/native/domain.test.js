@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   normalizeEvent,
+  normalizeSettings,
   parseBackup,
   createBackup,
   mergeEvents,
@@ -259,4 +260,9 @@ test("demo data is valid, reproducible within a week and isolated from storage",
   assert.equal(list.length, 15);
   assert.equal(new Set(list.map((e) => e.id)).size, list.length);
   list.forEach((e) => assert.deepEqual(normalizeEvent(e), e));
+});
+test("normalizeSettings defaults confirmBeforeDelete true and preserves false", () => {
+  assert.equal(normalizeSettings().confirmBeforeDelete, true);
+  assert.equal(normalizeSettings({ confirmBeforeDelete: false }).confirmBeforeDelete, false);
+  assert.equal(normalizeSettings({ confirmBeforeDelete: "no" }).confirmBeforeDelete, true);
 });

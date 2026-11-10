@@ -114,6 +114,7 @@ export function openCalendarDatabase(filename) {
         "showWeekends",
         "workStart",
         "workEnd",
+        "confirmBeforeDelete",
       ];
       const entries = Object.entries(settings).filter(([k]) =>
         allowed.includes(k),

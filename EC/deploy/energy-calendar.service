@@ -1,0 +1,24 @@
+# 精力日历 systemd 单元示例：/etc/systemd/system/energy-calendar.service
+# 前提：/opt/energy-calendar 放置项目代码（含 dist/），/etc/energy-calendar.env 放配置，
+# /var/lib/energy-calendar 为数据目录。若 Node 不在 /usr/bin/node，请调整 ExecStart 路径。
+[Unit]
+Description=Energy Calendar server
+After=network.target
+
+[Service]
+Type=simple
+User=energy-calendar
+Group=energy-calendar
+WorkingDirectory=/opt/energy-calendar
+EnvironmentFile=/etc/energy-calendar.env
+ExecStart=/usr/bin/node /opt/energy-calendar/server/index.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/energy-calendar
+
+[Install]
+WantedBy=multi-user.target

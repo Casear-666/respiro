@@ -49,6 +49,36 @@
 
 网页预览与桌面数据库独立。网页预览使用浏览器存储；它不是云同步版本。
 
+## 自建服务器（可选）
+
+除本地桌面版外，也可以把日历放到自己的 Ubuntu/Debian 服务器上，用同一个账号在多设备的浏览器中使用。需要 Node 24 或更高版本，后端只用 Node 内置模块（`node:http`、`node:sqlite`、`node:crypto`），无需额外数据库。
+
+```bash
+# 在服务器上（以 Ubuntu/Debian 为例）
+node --version                   # 确认 >= 24；否则先安装官方 Node 24 发行版或配置好的 NodeSource 源
+# 复制项目源码（src/、shared/、server/、desktop/、package.json、vite.config.js、index.html 等）
+npm ci && npm run build          # 需要 devDependencies 构建 dist/
+cp .env.server.example .env.server  # 按需修改后保持默认 127.0.0.1:3001 即可
+read -rs CALENDAR_ADMIN_PASSWORD && export CALENDAR_ADMIN_PASSWORD
+npm run server:create-user -- <用户名>   # 创建账号；密码只经环境变量传入
+unset CALENDAR_ADMIN_PASSWORD
+npm run server                          # 启动，默认仅监听 127.0.0.1:3001
+```
+
+首次使用推荐 SSH 隧道，立即可用且无需开放端口：
+
+```bash
+ssh -L 3001:127.0.0.1:3001 user@SERVER_IP
+# 本地浏览器打开 http://127.0.0.1:3001 登录
+```
+
+- 数据保存在 `CALENDAR_DATA_DIR`（默认 `./data`）：`accounts.sqlite` 存账号与会话，`users/<账号 id>/` 下是各自的 `calendar.sqlite` 与 `backups/`。目录属主建议收紧为服务账号（如 `energy-calendar`）。
+- 每个账号的数据库在每个服务进程内首次打开时尝试保存当天 JSON 快照；同一天已有快照则跳过，长期运行不会定时触发备份（`backups/daily/` 各保留最近 14 份），导入前另存 `before-import-*` 快照。完整备份请**停止服务后整体复制数据目录**（账号库与各日程库必须一起备份，应用不提供整站导出）。
+- 没有开放注册：账号只能由管理员用 `server:create-user` 创建；新增其他用户时各自数据自动隔离。同一日程在两处修改时，**后保存的一方生效**；在其他设备修改后请刷新页面查看。
+- 网页预览的浏览器数据与服务器账号互不相通；迁移请先在旧端「导出备份」，再在新端「导入日程」。
+- 暂不对外公开时保持 `CALENDAR_SECURE_COOKIE=false` 并经 SSH 隧道访问。之后要直接 HTTPS 访问：参考 `deploy/nginx.conf.example`（自签/已有证书占位）与 `deploy/energy-calendar.service`（systemd，按实际 Node 路径调整 ExecStart），同时设置 `CALENDAR_SECURE_COOKIE=true` 与 `CALENDAR_PUBLIC_ORIGIN=https://你的域名`。不建议对公网开放纯 HTTP 登录。
+- 运行时只需要已构建的 `dist/`、`server/`、`desktop/database.js`、`shared/` 与 `package.json`，后端不依赖 `node_modules`（只用 Node 内置模块）。`npm ci` 仅用于构建前端；也可以在本机构建后只把上述文件复制到服务器。Windows 的 `node_modules` 不能用于 Linux 部署，如需在服务器上构建请重新 `npm ci`。
+
 ## 本地开发与验证
 
 需要 Node 24 LTS 或更高版本（`node:sqlite`）。
@@ -71,9 +101,11 @@ npm run desktop:dist    # Windows x64 安装包
 - `src/planner/`：独立的新界面、原生交互封装、编辑器、偏好设置、串行保存与撤销历史。
 - `shared/domain.js`：日程校验、迁移、时区/全天边界、O(n log n) 全局重叠计算及负荷统计。
 - `desktop/`：Electron 主进程、受限 preload 通道与 SQLite 数据库。渲染进程无 Node 权限，启用 context isolation、sandbox 和 CSP，不启动本地 HTTP API。
+- `server/`：可选的自建服务器。`accounts.js` 管理账号（scrypt 口令散列、SHA-256 会话令牌），`app.js` 提供同源 JSON API 与静态资源，按账号隔离复用桌面的 `openCalendarDatabase`；`index.js`/`create-user.js` 为启动与建号入口。浏览器在服务端页面下经 `/api/runtime.js` 注入切换为服务器存储，登录态使用 HttpOnly、SameSite=Strict Cookie，写请求要求 `X-Calendar-Request` 头与同源 Origin。
+- `deploy/`：systemd 单元与 nginx HTTPS 反代示例，供以后直接对外访问时参考。
 - 生产前端与数据库模块仅依赖已打包资源及 Node 内置模块，安装包不包含开发依赖。
 
-当前只维护个人本地桌面版及网页预览，旧 Express/MySQL 服务、Docker 配置、旧离线启动服务、旧界面前端代码（`src/components/`、`src/stores/` 等）及其回归测试均已移除。
+当前维护本地桌面版、网页预览与可选的自建服务器；旧 Express/MySQL 服务、Docker 配置、旧离线启动服务、旧界面前端代码（`src/components/`、`src/stores/` 等）及其回归测试均已移除。
 
 项目已清理旧截图、重复安装包、测试解压副本和过时协作记录；`release/` 保留 2.0.1 安装包及启动脚本使用的免安装目录。当前使用与开发说明以本文件为准。清理记录与保留文件的校验值见 `artifacts/CLEANUP.json`。
 

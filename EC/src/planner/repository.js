@@ -5,9 +5,14 @@ import {
   createBackup,
 } from "../../shared/domain.js";
 import { version } from "../../package.json";
+import { createServerRepository } from "./serverRepository.js";
 const EVENTS_KEY = "energy-calendar-v2",
   SETTINGS_KEY = "energy-calendar-settings-v2";
 export const isDesktop = Boolean(window.energyCalendar);
+export const isServer =
+  !isDesktop &&
+  (window.__CALENDAR_SERVER__ === true ||
+    import.meta.env.VITE_CALENDAR_SERVER === "true");
 const readEvents = () => {
   const current = localStorage.getItem(EVENTS_KEY);
   if (current !== null) return parseBackup(current);
@@ -19,7 +24,7 @@ const readEvents = () => {
   }
   return [];
 };
-export const repository = window.energyCalendar || {
+const browserRepository = {
   async list() {
     return readEvents();
   },
@@ -66,3 +71,11 @@ export const repository = window.energyCalendar || {
     return { ok: true };
   },
 };
+export const repository = isDesktop
+  ? window.energyCalendar
+  : isServer
+    ? createServerRepository({
+        onUnauthorized: () =>
+          window.dispatchEvent(new Event("calendar:unauthorized")),
+      })
+    : browserRepository;

@@ -62,10 +62,11 @@ import {
   overlapLevels,
   rangeLoads,
 } from "../../shared/domain";
-import { energyForCount, energyLegend } from "../../shared/energy";
+import { energyForCount } from "../../shared/energy";
 import { DayPreview, useDwell, useKeyboardModality } from "./DayPreview";
 import { usePlanner } from "./usePlanner";
-import { isDesktop, repository } from "./repository";
+import { isDesktop, isServer, repository } from "./repository";
+import { useServerSession } from "./ServerGate";
 const CalendarCanvas = lazy(() => import("./CalendarCanvas"));
 import EventEditor from "./EventEditor";
 import Dialog from "./Dialog";
@@ -531,7 +532,9 @@ function TodayPanel({
 }
 
 function SettingsDialog({ model, onClose, onImport, onHelp }) {
-  const [info, setInfo] = useState(null);
+  const [info, setInfo] = useState(null),
+    [logoutError, setLogoutError] = useState("");
+  const serverSession = useServerSession();
   useEffect(() => {
     repository
       .info()
@@ -604,14 +607,37 @@ function SettingsDialog({ model, onClose, onImport, onHelp }) {
             }
           />
         </label>
+        <label className="setting-row">
+          <span>
+            删除前确认
+            <small>关闭后，删除日程不再弹出确认</small>
+          </span>
+          <input
+            className="switch"
+            role="switch"
+            aria-label="删除前确认"
+            type="checkbox"
+            checked={model.settings.confirmBeforeDelete}
+            onChange={(e) =>
+              model.updateSettings({ confirmBeforeDelete: e.target.checked })
+            }
+          />
+        </label>
       </div>
       <div className="settings-section">
         <h3>数据与备份</h3>
         <p className="settings-description">
           {isDesktop
             ? "日程使用 SQLite 保存在本机，每天启动时自动备份，保留最近 14 份。"
-            : "当前为网页预览，数据保存在此浏览器。桌面版使用独立的本地数据库。"}
+            : isServer
+              ? "日程保存在服务器，同一账号可在不同设备访问。导入前会保留备份。"
+              : "当前为网页预览，数据保存在此浏览器。桌面版使用独立的本地数据库。"}
         </p>
+        {isServer && (
+          <p className="settings-description">
+            在其他设备修改后，刷新页面查看最新日程。
+          </p>
+        )}
         <div className="data-actions">
           <button
             type="button"
@@ -643,6 +669,37 @@ function SettingsDialog({ model, onClose, onImport, onHelp }) {
           兼容旧版 events.json；导入会合并日程并跳过重复项。
         </p>
         {info?.dataPath && <code className="data-path">{info.dataPath}</code>}
+        {isServer && serverSession && (
+          <div className="setting-row">
+            <span>
+              当前账号
+              <small>{serverSession.user.username}</small>
+            </span>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={model.status !== "saved" || model.loading}
+              onClick={async () => {
+                setLogoutError("");
+                try {
+                  await serverSession.logout();
+                } catch (error) {
+                  setLogoutError(error.message || "退出登录失败");
+                  toast.error("退出登录失败", {
+                    description: error.message,
+                  });
+                }
+              }}
+            >
+              退出登录
+            </button>
+          </div>
+        )}
+        {logoutError && (
+          <p className="data-help" role="alert">
+            {logoutError}
+          </p>
+        )}
       </div>
       <div className="settings-bottom">
         <span>
@@ -1635,9 +1692,13 @@ export default function PlannerApp() {
                   <Leaf size={17} />
                 </span>
                 <span>
-                  <strong>我的本地空间</strong>
+                  <strong>{isServer ? "我的云端日历" : "我的本地空间"}</strong>
                   <small>
-                    {isDesktop ? "离线可用 · 只属于你" : "网页预览 · 本机保存"}
+                    {isServer
+                      ? "已连接服务器"
+                      : isDesktop
+                        ? "离线可用 · 只属于你"
+                        : "网页预览 · 本机保存"}
                   </small>
                 </span>
                 <Settings2 size={16} />
@@ -1867,19 +1928,11 @@ export default function PlannerApp() {
                     "正在保存…"
                   ) : isDesktop ? (
                     "所有更改已保存在本机"
+                  ) : isServer ? (
+                    "所有更改已保存到服务器"
                   ) : (
                     "已保存在此浏览器"
                   )}
-                </div>
-                <div
-                  className="energy-legend"
-                  aria-label="繁忙程度：鼠尾草绿、麦穗黄、焦糖橙、陶土红、酒红"
-                  title="事件颜色随同时重叠数变化，日期底色随当天安排总量变化。全天与跨日安排也会计算；按全部未完成日程计算。"
-                >
-                  <span className="legend-caption">繁忙程度</span>
-                  <span>从容</span>
-                  <i style={{ background: energyLegend() }} />
-                  <span>繁忙</span>
                 </div>
                 <div className="history-buttons">
                   <IconButton
@@ -1965,6 +2018,8 @@ export default function PlannerApp() {
               onSave={model.saveEvent}
               onDelete={model.deleteEvent}
               onClose={closeDraft}
+              confirmBeforeDelete={model.settings.confirmBeforeDelete}
+              onSettings={model.updateSettings}
             />
           )}
         </AnimatePresence>

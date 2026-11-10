@@ -49,8 +49,8 @@ async function verifyHeat(window, restored) {
         if (restored && cellColor ===
             getComputedStyle(other.querySelector('.fc-daygrid-day-frame')).backgroundColor)
           throw new Error('The packaged workload colors do not reflect overlaps');
-        if (!document.querySelector('.energy-legend') || typeof require !== 'undefined')
-          throw new Error('Missing legend or renderer isolation');
+        if (!document.querySelector('.segmented') || typeof require !== 'undefined')
+          throw new Error('Missing view switcher or renderer isolation');
         const rows = await window.energyCalendar.list();
         if (rows.length !== 3 || (restored && rows.find(row => row.id === 'smoke-3')?.title !== '已改期并持久化'))
           throw new Error('Saved records did not survive reopening');

@@ -34,7 +34,14 @@ const DURATIONS = [
 ];
 const isMac = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform || "");
 
-export default function EventEditor({ draft, onSave, onDelete, onClose }) {
+export default function EventEditor({
+  draft,
+  onSave,
+  onDelete,
+  onClose,
+  confirmBeforeDelete,
+  onSettings,
+}) {
   const existing = draft.event;
   const initial =
     existing ||
@@ -68,7 +75,8 @@ export default function EventEditor({ draft, onSave, onDelete, onClose }) {
   );
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(!!draft.confirmDelete),
-    [duplicate, setDuplicate] = useState(false);
+    [duplicate, setDuplicate] = useState(false),
+    [muteDelete, setMuteDelete] = useState(false);
   const editing = existing && !duplicate;
   const category = CATEGORIES.find((c) => c.id === tag) || CATEGORIES[4];
   const close = useCallback(() => onClose(), [onClose]);
@@ -282,7 +290,11 @@ export default function EventEditor({ draft, onSave, onDelete, onClose }) {
                   className="icon-button danger-button"
                   aria-label="删除日程"
                   title="删除日程"
-                  onClick={() => setConfirmDelete(true)}
+                  onClick={() =>
+                    confirmBeforeDelete === false
+                      ? (onDelete(existing.id), onClose())
+                      : setConfirmDelete(true)
+                  }
                 >
                   <Trash2 size={16} />
                 </button>
@@ -334,6 +346,14 @@ export default function EventEditor({ draft, onSave, onDelete, onClose }) {
             >
               <div>
                 <span>删除这项日程？之后仍可撤销。</span>
+                <label className="delete-confirm-mute">
+                  <input
+                    type="checkbox"
+                    checked={muteDelete}
+                    onChange={(e) => setMuteDelete(e.target.checked)}
+                  />
+                  以后不再提醒
+                </label>
                 <button
                   type="button"
                   className="ghost-button"
@@ -345,6 +365,8 @@ export default function EventEditor({ draft, onSave, onDelete, onClose }) {
                   type="button"
                   className="primary-button solid-danger"
                   onClick={() => {
+                    if (muteDelete)
+                      onSettings?.({ confirmBeforeDelete: false });
                     onDelete(existing.id);
                     onClose();
                   }}

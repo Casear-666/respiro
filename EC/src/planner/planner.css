@@ -917,13 +917,18 @@ kbd {
   align-items: center;
   gap: 8px;
   height: 34px;
-  min-width: 200px;
-  padding: 0 6px 0 11px;
+  min-width: 248px;
+  padding: 0 7px 0 12px;
   color: var(--muted);
   border-radius: var(--r-md);
   font-size: var(--text-base);
   background: var(--surface-raised);
   box-shadow: var(--shadow-xs), 0 0 0 1px var(--line);
+  cursor: text;
+  transition:
+    color var(--dur) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out),
+    background-color var(--dur) var(--ease-out);
 }
 [data-planner-theme="dark"] .search-trigger {
   background: var(--surface);
@@ -932,9 +937,36 @@ kbd {
   color: var(--soft-ink);
   box-shadow: var(--shadow-sm), 0 0 0 1px var(--line-strong);
 }
+.search-trigger:focus-visible {
+  box-shadow:
+    var(--shadow-sm),
+    0 0 0 1px var(--line-strong),
+    0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.search-trigger > svg {
+  color: var(--faint);
+  flex-shrink: 0;
+  transition: color var(--dur) var(--ease-out);
+}
+.search-trigger:hover > svg {
+  color: var(--accent);
+}
 .search-trigger > span {
   flex: 1;
   text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.search-trigger .kbd-group {
+  gap: 3px;
+  flex-shrink: 0;
+}
+.search-trigger kbd {
+  color: var(--faint);
+  border-bottom-width: 1px;
+  min-width: 18px;
+  padding: 2px 4px;
 }
 .mobile-menu {
   display: none;
@@ -1170,31 +1202,10 @@ kbd {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
-.energy-legend {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 auto;
-  white-space: nowrap;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  cursor: help;
-}
-.energy-legend > i {
-  width: 96px;
-  height: 6px;
-  border-radius: 6px;
-  display: block;
-  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.06);
-}
-.energy-legend .legend-caption {
-  color: var(--soft-ink);
-  font-weight: 550;
-  margin-right: 2px;
-}
 .history-buttons {
   display: flex;
   gap: 2px;
+  margin-left: auto;
 }
 .history-buttons .icon-button {
   width: 28px;
@@ -2695,6 +2706,26 @@ html.is-dragging-event * {
   line-height: 1.5;
   font-weight: 500;
 }
+.delete-confirm-mute {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: color-mix(in srgb, var(--danger) 75%, var(--muted));
+  cursor: pointer;
+  opacity: 0.85;
+}
+.delete-confirm-mute:hover {
+  opacity: 1;
+}
+.delete-confirm-mute input {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--danger);
+}
 .delete-confirm .ghost-button,
 .delete-confirm .primary-button {
   height: 30px;
@@ -3255,6 +3286,9 @@ html:active-view-transition-type(theme)::view-transition-new(root) {
 @media (max-width: 1360px) {
   .search-trigger {
     min-width: 0;
+    width: 34px;
+    padding: 0;
+    justify-content: center;
   }
   .search-trigger > span,
   .title-meta {
@@ -3350,12 +3384,8 @@ html:active-view-transition-type(theme)::view-transition-new(root) {
   .topbar-title h1 .title-year {
     display: none;
   }
-  .energy-legend .legend-caption,
   .event-category-dot {
     display: none;
-  }
-  .energy-legend > i {
-    width: 52px;
   }
   .event-tile > .event-time,
   .event-conflict {

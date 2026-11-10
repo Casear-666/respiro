@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS = {
   showWeekends: true,
   workStart: "08:00",
   workEnd: "22:00",
+  confirmBeforeDelete: true,
 };
 export function normalizeSettings(value = {}) {
   const input = value && typeof value === "object" ? value : {};
@@ -29,6 +30,10 @@ export function normalizeSettings(value = {}) {
     weekStart: input.weekStart === 0 ? 0 : 1,
     showWeekends:
       typeof input.showWeekends === "boolean" ? input.showWeekends : true,
+    confirmBeforeDelete:
+      typeof input.confirmBeforeDelete === "boolean"
+        ? input.confirmBeforeDelete
+        : true,
   };
 }
 
