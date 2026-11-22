@@ -6,6 +6,7 @@ import path from "node:path";
 import { createCalendarServer } from "../../server/app.js";
 import { openAccountStore } from "../../server/accounts.js";
 import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 
 const event = {
   id: "shared-id",
@@ -84,6 +85,13 @@ const withServer = async (callback, options = {}) => {
     const cookie = setCookie.split(";")[0];
     return { response, cookie, setCookie };
   };
+  const apply = async (headers, { upserts = [], deletes = [] }) => {
+    const snapshot = await (await api("/api/sync/snapshot", { headers })).json();
+    const versions = new Map(snapshot.changes.map(c => [c.id, c.revision]));
+    return api("/api/sync/push", { method: "POST", headers, body: { epoch: snapshot.epoch,
+      operations: [...upserts.map(event => ({ id: event.id, event })), ...deletes.map(id => ({ id, event: null }))]
+        .map(op => ({ ...op, opId: randomUUID(), baseRevision: versions.get(op.id) ?? 0 })) } });
+  };
   try {
     await callback({
       directory,
@@ -94,6 +102,7 @@ const withServer = async (callback, options = {}) => {
       bob,
       api,
       login,
+      apply,
       instance,
       advance: (ms) => {
         nowValue += ms;
@@ -196,20 +205,16 @@ test("a streamed body over 20 MiB is refused with a 413 response", () =>
   }));
 
 test("calendar CRUD, settings, import and export survive restart and isolate users", () =>
-  withServer(async ({ api, login, dataDir, alice, reopen }) => {
+  withServer(async ({ api, apply, login, dataDir, alice, reopen }) => {
     const { cookie } = await login();
     const authed = { cookie };
-    let response = await api("/api/events/apply", {
-      method: "POST",
-      headers: authed,
-      body: { upserts: [event] },
-    });
-    assert.deepEqual(await response.json(), { ok: true });
+    let response = await apply(authed, { upserts: [event] });
+    assert.equal((await response.json()).results[0].status, "accepted");
     assert.equal((await (await api("/api/events", { headers: authed })).json()).length, 1);
     response = await api("/api/settings", {
       method: "PATCH",
       headers: authed,
-      body: { theme: "dark", workEnd: "24:00" },
+      body: { theme: "dark", workEnd: "24:00", viewsVersion: 2, defaultView: "energyDial" },
     });
     assert.deepEqual(await response.json(), { ok: true });
     for (const patch of [
@@ -219,6 +224,7 @@ test("calendar CRUD, settings, import and export survive restart and isolate use
       { showWeekends: "yes" },
       { workStart: "25:00" },
       { workStart: "10:00", workEnd: "09:00" },
+      { viewsVersion: 3 },
       [1, 2],
       JSON.parse('{"__proto__":{}}'),
       { constructor: "x" },
@@ -231,12 +237,8 @@ test("calendar CRUD, settings, import and export survive restart and isolate use
       });
       assert.equal(failed.status, 400, JSON.stringify(patch));
     }
-    response = await api("/api/events/apply", {
-      method: "POST",
-      headers: authed,
-      body: {
+    response = await apply(authed, {
         upserts: [{ ...event, id: "ok-2" }, { ...event, id: "bad", end: "bad" }],
-      },
     });
     assert.equal(response.status, 400);
     assert.equal((await (await api("/api/events", { headers: authed })).json()).length, 1);
@@ -272,16 +274,8 @@ test("calendar CRUD, settings, import and export survive restart and isolate use
     const bobLogin = await login("bob", "another long passphrase");
     const bobAuth = { cookie: bobLogin.cookie };
     assert.deepEqual(await (await api("/api/events", { headers: bobAuth })).json(), []);
-    await api("/api/events/apply", {
-      method: "POST",
-      headers: bobAuth,
-      body: { upserts: [{ ...event, title: "鲍勃的同名编号日程" }] },
-    });
-    await api("/api/events/apply", {
-      method: "POST",
-      headers: bobAuth,
-      body: { deletes: [event.id] },
-    });
+    await apply(bobAuth, { upserts: [{ ...event, title: "鲍勃的同名编号日程" }] });
+    await apply(bobAuth, { deletes: [event.id] });
     assert.deepEqual(await (await api("/api/events", { headers: bobAuth })).json(), []);
     assert.equal((await (await api("/api/events", { headers: authed })).json()).length, 3);
     const observer = new DatabaseSync(
@@ -290,11 +284,7 @@ test("calendar CRUD, settings, import and export survive restart and isolate use
     try {
       observer.exec(`CREATE TRIGGER reject_http_insert BEFORE INSERT ON events
         WHEN NEW.id = 'reject-http' BEGIN SELECT RAISE(ABORT, 'injected sqlite failure'); END;`);
-      const rejectedWrite = await api("/api/events/apply", {
-        method: "POST",
-        headers: authed,
-        body: { upserts: [{ ...event, id: "reject-http", title: "注入失败" }] },
-      });
+      const rejectedWrite = await apply(authed, { upserts: [{ ...event, id: "reject-http", title: "注入失败" }] });
       assert.equal(rejectedWrite.status, 500);
       const failure = await rejectedWrite.json();
       assert.equal(failure.error, "服务器内部错误");

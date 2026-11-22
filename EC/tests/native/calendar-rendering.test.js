@@ -12,7 +12,7 @@ import {
   categoryOf,
 } from "../../shared/domain.js";
 import { energyForCount } from "../../shared/energy.js";
-let dom, server, render, act, waitFor, cleanup, CalendarCanvas;
+let dom, server, render, act, waitFor, cleanup, CalendarCanvas, ContextMenu;
 before(async () => {
   dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://calendar.test/",
@@ -48,6 +48,7 @@ before(async () => {
     appType: "custom",
     plugins: [(await import("@vitejs/plugin-react")).default()],
   });
+  ({ ContextMenu } = await server.ssrLoadModule("/src/planner/PlannerApp.jsx"));
   ({ default: CalendarCanvas } = await server.ssrLoadModule(
     "/src/planner/CalendarCanvas.jsx",
   ));
@@ -105,7 +106,7 @@ test("the actual calendar renders all-day workload colors and repaints cards and
   const day = () =>
     mounted.container.querySelector(`.fc-daygrid-day[data-date="${start}"]`);
   await waitFor(() => assert.equal(day().dataset.busyCount, "3"));
-  assert.ok(day().style.getPropertyValue("--day-heat").includes("0.206"));
+  assert.ok(day().style.getPropertyValue("--day-heat").includes("0.160"));
   // FullCalendar's public gesture callbacks must preview the same heat without committing data.
   await act(async () =>
     props.ref.current.getApi().getOption("eventDragStart")({}),
@@ -384,6 +385,46 @@ const monthSetup = async (events, extra = {}) => {
   return { mounted, props, first };
 };
 const previewCard = () => document.querySelector(".day-preview-card");
+test("moving through the preview and across adjacent dates keeps the last day's preview open", async () => {
+  const today = new Date();
+  const firstDay = dateKey(new Date(today.getFullYear(), today.getMonth(), 10));
+  const secondDay = dateKey(addDays(firstDay, 1));
+  const thirdDay = dateKey(addDays(firstDay, 2));
+  const { mounted } = await monthSetup([
+    allday("first", firstDay, secondDay),
+    allday("second", secondDay, thirdDay),
+  ]);
+  const cell = (key) => mounted.container.querySelector(`.fc-daygrid-day[data-date="${key}"]`);
+  const over = (target, from) => fire(target, "pointerover", { relatedTarget: from });
+  const first = cell(firstDay);
+  const second = cell(secondDay);
+  const third = cell(thirdDay);
+  await act(async () => over(first, null));
+  await waitFor(() => assert.equal(previewCard()?.dataset.date, firstDay));
+  const item = previewCard().querySelector(".day-preview-item");
+  await act(async () => {
+    fire(first, "pointerout", { relatedTarget: item });
+    over(item, first);
+    over(item.querySelector(".day-preview-title"), item);
+  });
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 200)));
+  assert.equal(previewCard()?.dataset.date, firstDay);
+  await act(async () => {
+    fire(item, "pointerout", { relatedTarget: second });
+    over(second, item);
+  });
+  await waitFor(() => assert.equal(previewCard()?.dataset.date, second.dataset.date));
+  assert.deepEqual([...previewCard().querySelectorAll(".day-preview-title")].map((el) => el.textContent), ["预览 second"]);
+  const gap = mounted.container.querySelector(".fc-view-harness");
+  await act(async () => {
+    over(gap, second);
+    over(gap.firstElementChild, gap);
+    over(third, gap.firstElementChild);
+  });
+  await waitFor(() => assert.equal(previewCard()?.dataset.date, third.dataset.date));
+  assert.match(previewCard().textContent, /留白时光/);
+});
 test("dwell lifts a busy month cell then opens a preview card", async () => {
   const today = dateKey(new Date());
   const events = [
@@ -751,22 +792,26 @@ test("a reopened preview anchors at the new cell immediately", async () => {
   cells[1].getBoundingClientRect = () => ({
     left: 400, top: 300, right: 480, bottom: 340, width: 80, height: 40,
   });
-  await act(async () => fire(cells[0], "pointerover", { pointerType: "mouse" }));
-  await waitFor(() => assert.ok(previewCard()), { timeout: 900 });
-  await act(async () =>
-    fire(
-      mounted.container.querySelector(".fc-view-harness"),
-      "pointerover",
-      { pointerType: "mouse" },
-    ),
-  );
-  await waitFor(() => assert.ok(!previewCard()), { timeout: 700 });
-  await act(async () => fire(cells[1], "pointerover", { pointerType: "mouse" }));
-  await waitFor(() => assert.ok(previewCard()), { timeout: 900 });
-  const transform = document.querySelector(".day-preview").style.transform;
-  assert.match(transform, /translateX\(440px\)/);
-  assert.match(transform, /translateY\(292px\)/);
-  assert.doesNotMatch(transform, /240px|192px/);
+  const firstLayout = new Map();
+  const observer = new MutationObserver(() => {
+    const card = previewCard();
+    if (!card || firstLayout.has(card.dataset.date)) return;
+    const { left, top, visibility } = card.parentElement.style;
+    firstLayout.set(card.dataset.date, [left, top, visibility]);
+  });
+  observer.observe(document.body, { childList: true, subtree: true, attributeFilter: ["data-date"] });
+  try {
+    await act(async () => fire(cells[0], "pointerover", { pointerType: "mouse" }));
+    await waitFor(() => assert.deepEqual(firstLayout.get(cells[0].dataset.date), ["240px", "192px", "visible"]));
+    await act(async () =>
+      fire(mounted.container.querySelector(".fc-view-harness"), "pointerover", { pointerType: "mouse" }),
+    );
+    await waitFor(() => assert.ok(!previewCard()), { timeout: 700 });
+    await act(async () => fire(cells[1], "pointerover", { pointerType: "mouse" }));
+    await waitFor(() => assert.deepEqual(firstLayout.get(cells[1].dataset.date), ["440px", "292px", "visible"]));
+  } finally {
+    observer.disconnect();
+  }
 });
 test("hovering a week header cell previews that day", async () => {
   const events = [
@@ -775,7 +820,7 @@ test("hovering a week header cell previews that day", async () => {
   const { mounted } = await monthSetup(events, { view: "timeGridWeek" });
   const header = await waitFor(() => {
     const cell = mounted.container.querySelector(
-      ".fc-col-header-cell[data-date]",
+      `.fc-col-header-cell[data-date="${dateKey(new Date())}"]`,
     );
     assert.ok(cell);
     return cell;
@@ -786,4 +831,288 @@ test("hovering a week header cell previews that day", async () => {
   await waitFor(() => assert.ok(previewCard()), { timeout: 900 });
   assert.equal(previewCard().dataset.date, header.dataset.date);
   assert.match(previewCard().textContent, /1 项安排/);
+});
+
+test("the dial renders overlapping bookings, opens the editor, and steps by day", async () => {
+  const today = dateKey(new Date());
+  const events = [["a", "09", "11"], ["b", "10", "12"]].map(([id, from, to]) =>
+    normalizeEvent({ id, title: id, start: today + "T" + from + ":00", end: today + "T" + to + ":00" }),
+  );
+  const ref = React.createRef();
+  let edited;
+  const mounted = render(React.createElement(CalendarCanvas, {
+    ref, events, allEvents: events, view: "energyDial", selectedDay: new Date(),
+    settings: { weekStart: 1, showWeekends: true }, onRange() {},
+    onEdit(id) { edited = id; },
+  }));
+  try {
+    await waitFor(() => assert.equal(mounted.container.querySelectorAll(".dial-arc").length, 2));
+    assert.equal(mounted.container.querySelector(".dial-center strong").textContent, "3时0分");
+    assert.equal(mounted.container.querySelectorAll(".dial-track").length, 2);
+    const widths = [...mounted.container.querySelectorAll(".dial-arc")].map((p) => p.getAttribute("stroke-width"));
+    assert.equal(new Set(widths).size, 1);
+    assert.ok([...mounted.container.querySelectorAll(".dial-arc")].every((p) => p.getAttribute("stroke-linecap") === "round"));
+    mounted.container.querySelector(".dial-agenda button").click();
+    assert.equal(edited, "a");
+    await act(async () => ref.current.getApi().next());
+    await waitFor(() => assert.equal(mounted.container.querySelectorAll(".dial-arc").length, 0));
+    assert.equal(dateKey(ref.current.getApi().getDate()), dateKey(addDays(today, 1)));
+  } finally {
+    mounted.unmount();
+  }
+});
+
+test("right-clicking events across week view, month preview, and day dial triggers onDelete directly", async () => {
+  const today = dateKey(new Date());
+  const events = [
+    normalizeEvent({
+      id: "rc-1",
+      title: "周视图右键删除",
+      start: `${today}T09:00:00`,
+      end: `${today}T10:00:00`,
+    }),
+    normalizeEvent({
+      id: "rc-2",
+      title: "表盘与预览右键删除",
+      start: `${today}T14:00:00`,
+      end: `${today}T15:00:00`,
+    }),
+  ];
+  const deleted = [];
+  const contexts = [];
+  // 1. Week view .fc-event
+  const weekMount = render(
+    React.createElement(CalendarCanvas, {
+      ref: React.createRef(),
+      events,
+      allEvents: events,
+      settings: { weekStart: 1, showWeekends: true, workStart: "08:00", workEnd: "22:00" },
+      view: "timeGridWeek",
+      selectedDay: new Date(),
+      onRange: () => {},
+      onDate: () => {},
+      onCreate: () => {},
+      onEdit: () => {},
+      onMove: () => {},
+      onDelete: (id) => deleted.push(["week", id]),
+      onContext: (ctx) => contexts.push(ctx),
+    }),
+  );
+  try {
+    const fcEvent = await waitFor(() => {
+      const node = weekMount.container.querySelector('[data-event-id="rc-1"]')?.closest(".fc-event");
+      assert.ok(node);
+      return node;
+    });
+    const ev = new window.MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+    await act(async () => fcEvent.dispatchEvent(ev));
+    assert.equal(ev.defaultPrevented, true);
+    assert.deepEqual(deleted, [["week", "rc-1"]]);
+    assert.equal(contexts.length, 0);
+  } finally {
+    weekMount.unmount();
+  }
+
+  // 2. Month view DayPreview item
+  const { mounted: monthMount } = await monthSetup(events, {
+    onDelete: (id) => deleted.push(["preview", id]),
+  });
+  try {
+    const cell = monthMount.container.querySelector(`.fc-daygrid-day[data-date="${today}"]`);
+    await act(async () => fire(cell, "pointerover", { pointerType: "mouse" }));
+    await waitFor(() => assert.ok(previewCard()), { timeout: 900 });
+    const item = previewCard().querySelector('.day-preview-item[data-event-id="rc-2"]');
+    assert.ok(item);
+    const ev = new window.MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+    await act(async () => item.dispatchEvent(ev));
+    assert.equal(ev.defaultPrevented, true);
+    assert.deepEqual(deleted.at(-1), ["preview", "rc-2"]);
+  } finally {
+    monthMount.unmount();
+  }
+
+  // 3. DayDial arc and agenda entry
+  const dialMount = render(
+    React.createElement(CalendarCanvas, {
+      ref: React.createRef(),
+      events,
+      allEvents: events,
+      view: "energyDial",
+      selectedDay: new Date(),
+      settings: { weekStart: 1, showWeekends: true },
+      onRange: () => {},
+      onDelete: (id) => deleted.push(["dial", id]),
+    }),
+  );
+  try {
+    await waitFor(() => assert.equal(dialMount.container.querySelectorAll(".dial-arc").length, 2));
+    const entry = dialMount.container.querySelector(".dial-entry");
+    const entryEv = new window.MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+    await act(async () => entry.dispatchEvent(entryEv));
+    assert.equal(entryEv.defaultPrevented, true);
+    assert.deepEqual(deleted.at(-1), ["dial", "rc-1"]);
+
+    const arc = dialMount.container.querySelectorAll(".dial-arc")[1];
+    const arcEv = new window.MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+    await act(async () => arc.dispatchEvent(arcEv));
+    assert.equal(arcEv.defaultPrevented, true);
+    assert.deepEqual(deleted.at(-1), ["dial", "rc-2"]);
+  } finally {
+    dialMount.unmount();
+  }
+});
+
+test("right-clicking a dial event removes it from both the dial face and agenda list and updates total duration", async () => {
+  const today = dateKey(new Date());
+  const initial = [
+    normalizeEvent({ id: "d1", title: "早会", start: `${today}T09:00:00`, end: `${today}T10:00:00` }),
+    normalizeEvent({ id: "d2", title: "下午专注", start: `${today}T14:00:00`, end: `${today}T16:00:00` }),
+  ];
+  function StatefulDial() {
+    const ref = React.useRef(null);
+    const [list, setList] = React.useState(initial);
+    return React.createElement(CalendarCanvas, {
+      ref,
+      events: list,
+      allEvents: list,
+      view: "energyDial",
+      selectedDay: new Date(),
+      settings: { weekStart: 1, showWeekends: true },
+      onRange: () => {},
+      onDelete: (id) => setList((prev) => prev.filter((e) => e.id !== id)),
+    });
+  }
+  const mounted = render(React.createElement(StatefulDial));
+  try {
+    await waitFor(() => assert.equal(mounted.container.querySelectorAll(".dial-arc").length, 2));
+    assert.equal(mounted.container.querySelector(".dial-center strong").textContent, "3时0分");
+    await act(async () =>
+      mounted.container.querySelector(".dial-arc").dispatchEvent(
+        new window.MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }),
+      ),
+    );
+    await waitFor(() => assert.equal(mounted.container.querySelectorAll(".dial-entry").length, 1));
+    await waitFor(() => assert.equal(mounted.container.querySelector(".dial-center strong").textContent, "2时0分"));
+    assert.match(mounted.container.querySelector(".dial-entry").textContent, /下午专注/);
+
+    await act(async () =>
+      mounted.container.querySelector(".dial-entry").dispatchEvent(
+        new window.MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 }),
+      ),
+    );
+    await waitFor(() => assert.equal(mounted.container.querySelectorAll(".dial-entry").length, 0));
+    assert.equal(mounted.container.querySelector(".dial-center strong").textContent, "0时0分");
+  } finally {
+    mounted.unmount();
+  }
+});
+
+test("right-clicking a month cell opens context menu with per-event and batch delete actions", async () => {
+  const today = dateKey(new Date());
+  const nextDay = dateKey(addDays(today, 1));
+  const events = [
+    normalizeEvent({
+      id: "m-2",
+      title: "方案评审",
+      tag: "meeting",
+      allDay: false,
+      start: `${today}T14:00:00`,
+      end: `${today}T15:30:00`,
+    }),
+    normalizeEvent({
+      id: "m-1",
+      title: "晨间规划",
+      tag: "work",
+      allDay: true,
+      start: today,
+      end: nextDay,
+    }),
+  ];
+  const contexts = [];
+  const { mounted } = await monthSetup(events, {
+    onContext: (ctx) => contexts.push(ctx),
+  });
+  try {
+    const emptyCell = [...mounted.container.querySelectorAll(".fc-daygrid-day[data-date]")].find(
+      (el) => el.dataset.busyCount === "0",
+    );
+    assert.ok(emptyCell);
+    const emptyEv = new window.MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: 80,
+      clientY: 90,
+    });
+    await act(async () => emptyCell.dispatchEvent(emptyEv));
+    assert.equal(emptyEv.defaultPrevented, true);
+    assert.equal(contexts.at(-1).date, emptyCell.dataset.date);
+    assert.deepEqual(contexts.at(-1).events, []);
+
+    const busyCell = mounted.container.querySelector(`.fc-daygrid-day[data-date="${today}"]`);
+    assert.ok(busyCell);
+    const busyEv = new window.MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      clientX: 120,
+      clientY: 160,
+    });
+    await act(async () => busyCell.dispatchEvent(busyEv));
+    assert.equal(busyEv.defaultPrevented, true);
+    const ctx = contexts.at(-1);
+    assert.equal(ctx.date, today);
+    assert.equal(ctx.allDay, true);
+    assert.deepEqual(
+      ctx.events.map((e) => e.id),
+      ["m-1", "m-2"],
+    );
+
+    const deletedSingle = [];
+    const deletedBatch = [];
+    let closedCount = 0;
+    const menuMount = render(
+      React.createElement(ContextMenu, {
+        context: ctx,
+        event: null,
+        dayEvents: ctx.events,
+        canPaste: false,
+        onClose: () => {
+          closedCount += 1;
+        },
+        onCreateHere: () => {},
+        onPasteHere: () => {},
+        onDeleteEvent: (id) => deletedSingle.push(id),
+        onDeleteDayEvents: (ids) => deletedBatch.push(ids),
+      }),
+    );
+    try {
+      const menu = menuMount.container.querySelector(".context-menu");
+      assert.ok(menu);
+      assert.match(menu.textContent, /在此新建日程/);
+      assert.match(menu.textContent, /粘贴到这一天/);
+      const itemDeletes = [...menu.querySelectorAll(".context-menu-event-delete")];
+      assert.deepEqual(
+        itemDeletes.map((btn) => btn.dataset.eventId),
+        ["m-1", "m-2"],
+      );
+      assert.match(itemDeletes[0].textContent, /删除「晨间规划」/);
+      assert.match(itemDeletes[1].textContent, /删除「方案评审」/);
+      const deleteAll = menu.querySelector(".context-menu-delete-all");
+      assert.ok(deleteAll);
+      assert.match(deleteAll.textContent, /删除当日全部日程（2 项）/);
+
+      await act(async () => itemDeletes[0].click());
+      assert.deepEqual(deletedSingle, ["m-1"]);
+      assert.equal(closedCount, 1);
+
+      await act(async () => deleteAll.click());
+      assert.deepEqual(deletedBatch, [["m-1", "m-2"]]);
+      assert.equal(closedCount, 2);
+    } finally {
+      menuMount.unmount();
+    }
+  } finally {
+    mounted.unmount();
+  }
 });

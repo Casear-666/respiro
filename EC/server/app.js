@@ -2,16 +2,22 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import { isIP } from "node:net";
 import { openAccountStore } from "./accounts.js";
 import { openCalendarDatabase } from "../desktop/database.js";
+import { openAiCache } from "./ai-store.js";
+import { createAiService, validateCustomBaseUrl } from "./ai.js";
 import pkg from "../package.json" with { type: "json" };
 
 const COOKIE_NAME = "calendar_session";
 const COOKIE_BASE = `HttpOnly; SameSite=Strict; Path=/`;
 const LOGIN_BODY_LIMIT = 8 * 1024;
+const AI_CAPTURE_BODY_LIMIT = 16 * 1024 * 1024;
+const AI_WEIGHT_BODY_LIMIT = 512 * 1024;
 const CALENDAR_BODY_LIMIT = 20 * 1024 * 1024;
 const LOGIN_ATTEMPTS = 10,
   LOGIN_WINDOW = 60000;
+const AI_RATE_WINDOW = 60000;
 const MAX_CALENDARS = 32;
 const REQUEST_TIMEOUT = 15000;
 
@@ -40,19 +46,32 @@ const MIME = {
 
 const WRITE_ROUTES = new Set([
   "POST /api/auth/login",
+  "POST /api/auth/register",
   "POST /api/auth/logout",
   "POST /api/events/apply",
   "PATCH /api/settings",
   "POST /api/import",
+  "POST /api/sync/push",
+  "POST /api/sync/resolve",
+  "POST /api/ai/quick-capture",
+  "POST /api/ai/cognitive-weight",
+  "POST /api/ai/config",
 ]);
 const READ_ROUTES = new Set([
   "GET /api/health",
   "GET /api/runtime.js",
   "GET /api/auth/me",
+  "GET /api/auth/options",
   "GET /api/events",
   "GET /api/settings",
   "GET /api/info",
   "GET /api/export",
+  "GET /api/sync/snapshot",
+  "GET /api/sync/changes",
+  "GET /api/sync/conflicts",
+  "GET /api/ai/status",
+  "GET /api/ai/weights",
+  "GET /api/ai/config",
 ]);
 const KNOWN_PATHS = new Set(
   [...WRITE_ROUTES, ...READ_ROUTES].map((r) => r.split(" ")[1]),
@@ -66,9 +85,11 @@ const toMinutes = (value) =>
 const SETTING_RULES = {
   theme: (v) => ["light", "dark", "system"].includes(v),
   defaultView: (v) =>
-    ["dayGridMonth", "timeGridWeek", "timeGridDay"].includes(v),
+    ["dayGridMonth", "timeGridWeek", "timeGridDay", "energyDial"].includes(v),
+  viewsVersion: (v) => v === 2,
   weekStart: (v) => v === 0 || v === 1,
   showWeekends: (v) => typeof v === "boolean",
+  confirmBeforeDelete: (v) => typeof v === "boolean",
   workStart: (v) => typeof v === "string" && HHMM.test(v),
   workEnd: (v) => typeof v === "string" && (HHMM.test(v) || v === "24:00"),
 };
@@ -109,12 +130,18 @@ export function createCalendarServer({
   distDir,
   secureCookies = false,
   publicOrigin,
+  allowRegistration = true,
+  trustProxy = false,
   now = Date.now,
+  ai = {},
+  aiRateLimit = 15,
 }) {
   const accounts = openAccountStore(path.join(dataDir, "accounts.sqlite"), {
     now,
   });
+  const aiService = createAiService({ ...ai, now });
   const calendars = new Map();
+  const aiCaches = new Map();
   const userDir = (id) => path.join(dataDir, "users", id);
   const calendarFor = (user) => {
     let entry = calendars.get(user.id);
@@ -144,7 +171,40 @@ export function createCalendarServer({
     return db;
   };
 
+  const aiCacheFor = (user) => {
+    let entry = aiCaches.get(user.id);
+    if (entry) {
+      aiCaches.delete(user.id);
+      aiCaches.set(user.id, entry);
+      entry.used = now();
+      return entry.db;
+    }
+    const dir = userDir(user.id);
+    const db = openAiCache(path.join(dir, "ai-cache.sqlite"), { now });
+    aiCaches.set(user.id, { db, used: now() });
+    if (aiCaches.size > MAX_CALENDARS) {
+      const [oldest, oldestEntry] = aiCaches.entries().next().value;
+      if (oldest !== user.id) {
+        aiCaches.delete(oldest);
+        try {
+          oldestEntry.db.close();
+        } catch {}
+      }
+    }
+    return db;
+  };
+
   const attempts = new Map();
+  const aiAttempts = new Map();
+  let registrationsInFlight = 0;
+  const clientAddress = req => {
+    const address = req.socket.remoteAddress;
+    if (trustProxy && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address)) {
+      const forwarded = String(req.headers["x-forwarded-for"] || "").split(",").at(-1).trim();
+      if (isIP(forwarded)) return forwarded;
+    }
+    return address;
+  };
   const loginAllowed = (address) => {
     const t = now();
     if (attempts.size >= 1024)
@@ -158,6 +218,21 @@ export function createCalendarServer({
     }
     entry.count++;
     return entry.count <= LOGIN_ATTEMPTS;
+  };
+  const aiAllowed = (userId) => {
+    if (!(aiRateLimit > 0)) return true;
+    const t = now();
+    if (aiAttempts.size >= 1024)
+      for (const [key, value] of aiAttempts)
+        if (value.resetAt <= t) aiAttempts.delete(key);
+    if (!aiAttempts.has(userId) && aiAttempts.size >= 1024) return false;
+    let entry = aiAttempts.get(userId);
+    if (!entry || entry.resetAt <= t) {
+      entry = { count: 0, resetAt: t + AI_RATE_WINDOW };
+      aiAttempts.set(userId, entry);
+    }
+    entry.count++;
+    return entry.count <= aiRateLimit;
   };
 
   const cookieHeader = (value, maxAge) =>
@@ -267,6 +342,7 @@ export function createCalendarServer({
       return sendError(res, 405, "方法不允许");
 
     if (pathname === "/api/health") return sendJson(res, 200, { ok: true });
+    if (route === "GET /api/auth/options") return sendJson(res, 200, { registrationEnabled: allowRegistration });
     if (pathname === "/api/runtime.js") {
       res.writeHead(200, {
         "Content-Type": "application/javascript; charset=utf-8",
@@ -287,9 +363,13 @@ export function createCalendarServer({
       if (type !== "application/json")
         return sendError(res, 400, "请求需要 application/json");
       const limit =
-        pathname === "/api/auth/login" || pathname === "/api/auth/logout"
+        pathname.startsWith("/api/auth/") || pathname === "/api/ai/config"
           ? LOGIN_BODY_LIMIT
-          : CALENDAR_BODY_LIMIT;
+          : pathname === "/api/ai/quick-capture"
+            ? AI_CAPTURE_BODY_LIMIT
+            : pathname === "/api/ai/cognitive-weight"
+              ? AI_WEIGHT_BODY_LIMIT
+              : CALENDAR_BODY_LIMIT;
       let raw;
       try {
         raw = await readBody(req, limit);
@@ -322,6 +402,20 @@ export function createCalendarServer({
       }
     }
 
+    if (route === "POST /api/auth/register") {
+      if (!allowRegistration) return sendError(res, 403, "当前服务器暂未开放注册");
+      if (accounts.session(parseCookies(req)[COOKIE_NAME])) return sendError(res, 409, "请先退出当前账号后再注册");
+      if (!accounts.consumeRegistrationAttempt(clientAddress(req)) || registrationsInFlight >= 4)
+        return sendError(res, 429, "注册尝试过于频繁，请稍后再试", { "Retry-After": "900" });
+      if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.username !== "string" || typeof body.password !== "string")
+        return sendError(res, 400, "请填写用户名和密码");
+      registrationsInFlight++;
+      try {
+        const { user, token } = await accounts.register(body.username, body.password);
+        return sendJson(res, 201, { user }, { "Set-Cookie": cookieHeader(token, 604800) });
+      } finally { registrationsInFlight--; }
+    }
+
     if (route === "POST /api/auth/login") {
       if (!loginAllowed(req.socket.remoteAddress))
         return sendError(res, 429, "尝试过于频繁，请稍后再试");
@@ -351,29 +445,22 @@ export function createCalendarServer({
 
     const calendar = () => calendarFor(user);
 
+    if (route === "GET /api/sync/snapshot") return sendJson(res, 200, calendar().sync.snapshot());
+    if (route === "GET /api/sync/changes") {
+      const raw = url.searchParams.get("since") ?? "0";
+      if (!/^\d+$/.test(raw)) return sendError(res, 400, "同步游标无效");
+      return sendJson(res, 200, calendar().sync.changes({ since: Number(raw), epoch: url.searchParams.get("epoch") }));
+    }
+    if ((route === "POST /api/sync/push" || route === "POST /api/sync/resolve") && (!body || typeof body !== "object" || Array.isArray(body)))
+      return sendError(res, 400, "同步请求无效");
+    if (route === "POST /api/sync/push") return sendJson(res, 200, calendar().sync.push(body));
+    if (route === "GET /api/sync/conflicts") return sendJson(res, 200, calendar().sync.conflicts());
+    if (route === "POST /api/sync/resolve") return sendJson(res, 200, calendar().sync.resolve(body));
+
     if (route === "GET /api/auth/me") return sendJson(res, 200, { user });
     if (route === "GET /api/events") return sendJson(res, 200, calendar().list());
     if (route === "POST /api/events/apply") {
-      if (!body || typeof body !== "object" || Array.isArray(body))
-        return sendError(res, 400, "日程变更无效");
-      const { upserts = [], deletes = [] } = body;
-      if (!Array.isArray(upserts) || !Array.isArray(deletes))
-        return sendError(res, 400, "日程变更无效");
-      if (upserts.some((e) => !e || typeof e !== "object" || Array.isArray(e)))
-        return sendError(res, 400, "日程格式不正确");
-      if (
-        deletes.some(
-          (id) => typeof id !== "string" || !id || id.length > 120,
-        )
-      )
-        return sendError(res, 400, "日程变更无效");
-      try {
-        calendar().apply({ upserts, deletes });
-      } catch (error) {
-        if (error.code) throw error;
-        return sendError(res, 400, error.message || "日程变更无效");
-      }
-      return sendJson(res, 200, { ok: true });
+      return sendError(res, 428, "请刷新页面后使用带版本校验的新版本保存日程");
     }
     if (route === "GET /api/settings")
       return sendJson(res, 200, calendar().getSettings());
@@ -401,7 +488,107 @@ export function createCalendarServer({
         version: pkg.version,
         desktop: false,
         server: true,
+        aiEnabled: aiService.status(aiCacheFor(user).getConfig()).enabled,
       });
+    if (route === "GET /api/ai/status")
+      return sendJson(res, 200, aiService.status(aiCacheFor(user).getConfig()));
+    if (route === "GET /api/ai/config")
+      return sendJson(
+        res,
+        200,
+        aiService.getConfigStatus(aiCacheFor(user).getConfig()),
+      );
+    if (route === "POST /api/ai/config") {
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return sendError(res, 400, "AI 配置参数无效");
+      }
+      let nextMode;
+      if (body.mode !== undefined) {
+        if (body.mode !== "custom" && body.mode !== "shared") {
+          return sendError(res, 400, "AI API 模式须为 custom 或 shared");
+        }
+        nextMode = body.mode;
+      }
+      let nextApiKey;
+      if (body.apiKey !== undefined) {
+        if (body.apiKey === null) {
+          nextApiKey = "";
+        } else if (typeof body.apiKey === "string") {
+          const trimmed = body.apiKey.trim();
+          if (trimmed.length > 256 || /\s/.test(trimmed)) {
+            return sendError(
+              res,
+              400,
+              "API Key 格式无效（不能包含空白或超过 256 个字符）",
+            );
+          }
+          nextApiKey = trimmed;
+        } else {
+          return sendError(res, 400, "API Key 参数格式无效");
+        }
+      }
+      let nextBaseUrl;
+      if (body.baseUrl !== undefined) {
+        nextBaseUrl = validateCustomBaseUrl(body.baseUrl);
+      }
+      const updated = aiCacheFor(user).setConfig({
+        mode: nextMode,
+        apiKey: nextApiKey,
+        baseUrl: nextBaseUrl,
+      });
+      return sendJson(res, 200, aiService.getConfigStatus(updated));
+    }
+    if (route === "GET /api/ai/weights") {
+      const rawIds = url.searchParams.get("ids");
+      const ids = rawIds
+        ? new Set(
+            rawIds
+              .split(",")
+              .map((id) => id.trim())
+              .filter(Boolean),
+          )
+        : null;
+      return sendJson(
+        res,
+        200,
+        aiService.listCachedWeights({
+          calendar: calendar(),
+          cache: aiCacheFor(user),
+          ids,
+        }),
+      );
+    }
+    if (route === "POST /api/ai/quick-capture") {
+      if (!aiAllowed(user.id))
+        return sendError(res, 429, "AI 请求过于频繁，请稍后再试", {
+          "Retry-After": "60",
+        });
+      const userConfig = aiCacheFor(user).getConfig();
+      return sendJson(
+        res,
+        200,
+        await aiService.quickCapture(body, {
+          userSettings: calendar().getSettings(),
+          userConfig,
+        }),
+      );
+    }
+    if (route === "POST /api/ai/cognitive-weight") {
+      if (!aiAllowed(user.id))
+        return sendError(res, 429, "AI 请求过于频繁，请稍后再试", {
+          "Retry-After": "60",
+        });
+      const aiCache = aiCacheFor(user);
+      return sendJson(
+        res,
+        200,
+        await aiService.scoreEvents(body, {
+          calendar: calendar(),
+          cache: aiCache,
+          userConfig: aiCache.getConfig(),
+        }),
+      );
+    }
     if (route === "GET /api/export") {
       const payload = calendar().export();
       res.writeHead(200, {
@@ -439,6 +626,16 @@ export function createCalendarServer({
 
   const server = http.createServer((req, res) => {
     handle(req, res).catch((error) => {
+      if (error.status && !res.headersSent) {
+        return sendError(
+          res,
+          error.status,
+          error.message,
+          error.retryAfter
+            ? { "Retry-After": String(error.retryAfter) }
+            : undefined,
+        );
+      }
       console.error("服务器内部错误：", error);
       if (!res.headersSent)
         sendError(res, 500, "服务器内部错误");
@@ -467,6 +664,12 @@ export function createCalendarServer({
         } catch {}
       }
       calendars.clear();
+      for (const entry of aiCaches.values()) {
+        try {
+          entry.db.close();
+        } catch {}
+      }
+      aiCaches.clear();
       accounts.close();
     },
   };

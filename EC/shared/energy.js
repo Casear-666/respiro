@@ -1,11 +1,11 @@
 // The calendar's primary color channel always represents workload, never category.
-// Earthy greens, harvest golds and fired-clay reds fit the warm paper interface.
+// A blue ramp runs from pale sky to deep indigo as the day gets busier.
 const stops = [
-  { count: 1, h: 109, s: 25, l: 43, label: "从容" },
-  { count: 2, h: 44, s: 54, l: 50, label: "充实" },
-  { count: 3, h: 27, s: 59, l: 51, label: "较忙" },
-  { count: 5, h: 12, s: 53, l: 45, label: "繁忙" },
-  { count: 8, h: 355, s: 43, l: 37, label: "高负荷" },
+  { count: 1, h: 206, s: 80, l: 74, label: "从容" },
+  { count: 2, h: 212, s: 78, l: 64, label: "充实" },
+  { count: 3, h: 218, s: 76, l: 55, label: "较忙" },
+  { count: 5, h: 226, s: 68, l: 46, label: "繁忙" },
+  { count: 8, h: 236, s: 56, l: 36, label: "高负荷" },
 ];
 function luminance(h, s, l) {
   s /= 100;
@@ -39,8 +39,8 @@ export function energyForCount(value) {
   const h = (lower.h + hueDelta * t + 360) % 360,
     s = lower.s + (upper.s - lower.s) * t;
   let l = lower.l + (upper.l - lower.l) * t;
-  const dark = textLuminance([41, 39, 31]),
-    light = textLuminance([255, 250, 242]);
+  const dark = textLuminance([15, 27, 45]),
+    light = textLuminance([255, 255, 255]);
   const minContrast = (textLum) =>
     Math.min(
       contrast(textLum, luminance(h, s, l + 2)),
@@ -57,10 +57,10 @@ export function energyForCount(value) {
     s,
     l,
     ink,
-    text: darkText ? "#29271f" : "#fffaf2",
+    text: darkText ? "#0f1b2d" : "#ffffff",
     contrast: minContrast(darkText ? dark : light),
     gradient: `linear-gradient(180deg, hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${(l + 2).toFixed(1)}%), hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${(l - 2).toFixed(1)}%))`,
-    cell: `hsl(${h.toFixed(1)} ${s.toFixed(1)}% ${l.toFixed(1)}% / ${(0.14 + count * 0.022).toFixed(3)})`,
+    cell: `hsl(${h.toFixed(1)} 90% 60% / ${(0.07 + count * 0.03).toFixed(3)})`,
     label: [...stops].reverse().find((stop) => count >= stop.count).label,
   };
 }

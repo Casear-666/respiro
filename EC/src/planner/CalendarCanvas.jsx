@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { useMotionValue } from "framer-motion";
+import { DialContext, dialViews } from "./DayDial";
 import FullCalendar from "@fullcalendar/react";
 import dayGridPlugin from "@fullcalendar/daygrid";
 import timeGridPlugin from "@fullcalendar/timegrid";
@@ -18,6 +19,8 @@ import {
   categoryOf,
   dateKey,
   dayLoad,
+  eventCognitiveInfo,
+  eventCognitiveUnits,
   eventOnDay,
   eventsByDay,
   localDate,
@@ -39,10 +42,11 @@ const HEAT_TWEEN =
   typeof CSS !== "undefined" && typeof CSS.registerProperty === "function";
 const heatCache = new Map();
 const heatFor = (count) => {
-  let hit = heatCache.get(count);
+  const key = Number(count).toFixed(1);
+  let hit = heatCache.get(key);
   if (!hit) {
-    hit = energyForCount(count);
-    heatCache.set(count, hit);
+    hit = energyForCount(Number(key));
+    heatCache.set(key, hit);
   }
   return hit;
 };
@@ -65,13 +69,55 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
     onDate,
     onCreate,
     onEdit,
+    onDelete,
     onMove,
     onRange,
     onContext,
+    aiWeights = null,
+    energyMode = "density",
   },
   ref,
 ) {
+  const onDeleteRef = useRef(onDelete);
+  const onContextRef = useRef(onContext);
+  onDeleteRef.current = onDelete;
+  onContextRef.current = onContext;
   const [gesture, setGesture] = useState("");
+  const canvas = useRef(null);
+  const lastSelection = useRef(null);
+  const selectedKey = dateKey(selectedDay);
+  const monthStart = range?.currentStart;
+  useLayoutEffect(() => {
+    const previous = lastSelection.current;
+    lastSelection.current = { view, selectedKey, monthStart };
+    if (view !== "dayGridMonth" || previous?.view !== view ||
+        !monthStart || !previous.monthStart ||
+        window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    const frame = requestAnimationFrame(() => {
+      if (previous.monthStart !== monthStart) {
+        const offset = Math.sign(monthStart - previous.monthStart) * 32;
+        canvas.current?.querySelector(".fc-daygrid-body")?.animate?.(
+          [{ opacity: 0.35, transform: `translateX(${offset}px)` }, { opacity: 1, transform: "none" }],
+          { duration: 290, easing: "cubic-bezier(.2,.72,.2,1)" },
+        );
+        return;
+      }
+      if (previous.selectedKey === selectedKey) return;
+      const findFrame = (key) => canvas.current?.querySelector(
+        `.fc-daygrid-day[data-date="${key}"] .fc-daygrid-day-frame`,
+      );
+      const source = findFrame(previous.selectedKey);
+      const target = findFrame(selectedKey);
+      if (!source || !target) return;
+      const from = source.getBoundingClientRect();
+      const to = target.getBoundingClientRect();
+      target.animate?.(
+        [{ transform: `translate(${from.left - to.left}px, ${from.top - to.top}px)` }, { transform: "none" }],
+        { pseudoElement: "::after", duration: 310, easing: "cubic-bezier(.2,.72,.2,1)" },
+      );
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [view, selectedKey, monthStart]);
   const cancelled = useRef(false);
   const [preview, setPreview] = useState(null);
   const previewFrame = useRef(null),
@@ -105,13 +151,20 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
       ),
     );
   }, [range]);
+  const loadOptions = useMemo(
+    () =>
+      energyMode === "cognitive"
+        ? { weightsMap: aiWeights, energyMode }
+        : undefined,
+    [aiWeights, energyMode],
+  );
   const loadMap = useMemo(() => {
     if (!gridDays) return null;
-    return rangeLoads(heatEvents, localDate(range.start), gridDays);
-  }, [heatEvents, range, gridDays]);
+    return rangeLoads(heatEvents, localDate(range.start), gridDays, loadOptions);
+  }, [heatEvents, range, gridDays, loadOptions]);
   const loads = useCallback(
-    (key) => loadMap?.get(key) ?? dayLoad(heatEvents, key),
-    [loadMap, heatEvents],
+    (key) => loadMap?.get(key) ?? dayLoad(heatEvents, key, loadOptions),
+    [loadMap, heatEvents, loadOptions],
   );
   const dayCells = useMemo(() => {
     if (!gridDays) return null;
@@ -161,12 +214,12 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
   const styleDay = useCallback(
     (element, date) => {
       const load = loads(dateKey(date)),
-        heat = heatFor(load.count);
+        heatVal = energyMode === "cognitive" ? load.effectiveCount : load.count,
+        heat = heatFor(heatVal || 1);
       const viewType = ref.current?.getApi()?.view.type ?? view;
       const { prev, next } = rowNeighbors(date, {
         firstDay: settings.weekStart,
         showWeekends: settings.showWeekends,
-        single: viewType === "timeGridDay",
       });
       const other = element.classList.contains("fc-day-other"),
         selfMonth = localDate(date).getMonth();
@@ -177,16 +230,20 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
           localDate(neighbor).getMonth() !== selfMonth
         )
           return "transparent";
-        const count = loads(neighbor).count;
+        const neighborLoad = loads(neighbor);
+        const count =
+          energyMode === "cognitive"
+            ? neighborLoad.effectiveCount
+            : neighborLoad.count;
         return count ? heatFor(count).cell : "transparent";
       };
-      setVar(element, "--day-heat", load.count ? heat.cell : "transparent");
+      setVar(element, "--day-heat", heatVal ? heat.cell : "transparent");
       setVar(element, "--day-heat-ink", heat.ink);
       setVar(element, "--heat-prev", bleed(prev));
       setVar(element, "--heat-next", bleed(next));
       element.dataset.busyCount = String(load.count);
     },
-    [loads, settings.weekStart, settings.showWeekends, view, ref],
+    [loads, settings.weekStart, settings.showWeekends, view, ref, energyMode],
   );
   const syncDayHeat = useCallback(() => {
     const root = ref.current?.getApi()?.el;
@@ -220,9 +277,14 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
         `.fc-col-header-cell[data-date="${key}"] .fc-scrollgrid-sync-inner`,
       );
       if (header) {
+        const headerLoad = loads(key);
+        const headerVal =
+          energyMode === "cognitive"
+            ? headerLoad.effectiveCount
+            : headerLoad.count;
         header.style.setProperty(
           "--day-heat-ink",
-          heatFor(loads(key).count).ink,
+          heatFor(headerVal || 1).ink,
         );
         targets.push(header);
       }
@@ -233,7 +295,7 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
       targets.forEach((el) => el.classList.add("is-dwell"));
       lifted.current = { key, els: targets };
     },
-    [ref, loads],
+    [ref, loads, energyMode],
   );
   const dwell = useDwell({ onLift: liftCell });
   useEffect(() => {
@@ -254,8 +316,10 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
       load: loads(key),
       levels,
       today: key === dateKey(new Date()),
+      weightsMap: aiWeights,
+      energyMode,
     }),
-    [dayCells, visibleEvents, loads, levels],
+    [dayCells, visibleEvents, loads, levels, aiWeights, energyMode],
   );
   const startRowDrag = (event, e) => {
     if (e.button !== 0 || e.pointerType === "touch") return;
@@ -541,17 +605,44 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
     },
     [onMove],
   );
+  const eventMap = useMemo(
+    () => new Map(allEvents.map((e) => [String(e.id), e])),
+    [allEvents],
+  );
   const renderEvent = (info) => {
     const event = info.event,
       category = categoryOf(event.extendedProps),
       level = levels.get(event.id) || 1;
-    const heat = energyForCount(level);
+    const rawEvent = eventMap.get(String(event.id)) ?? {
+      id: event.id,
+      title: event.title,
+      tag: event.extendedProps.tag,
+      description: event.extendedProps.description || "",
+      allDay: event.allDay,
+      start: event.startStr || event.start,
+      end: event.endStr || event.end,
+    };
+    const isCognitive = energyMode === "cognitive";
+    const cog = isCognitive ? eventCognitiveInfo(rawEvent, aiWeights) : null;
+    const cogUnits = isCognitive ? eventCognitiveUnits(rawEvent, aiWeights) : 0;
+    const tileHeat = isCognitive
+      ? Math.max(
+          level,
+          Math.min(8, Number((cogUnits * 1.1 + (cog.score - 1) * 0.45).toFixed(1))),
+        )
+      : level;
+    const heat = energyForCount(tileHeat);
     return (
       <div
         className={`event-tile ${event.extendedProps.completed ? "is-complete" : ""}`}
         data-energy-count={level}
+        data-cognitive-score={cog ? cog.score : undefined}
         data-event-id={event.id}
-        title={`${event.title} · ${level} 项同时重叠 · ${heat.label}`}
+        title={
+          cog
+            ? `${event.title} · ${cog.label} (Lv.${cog.score})${level > 1 ? ` · ${level} 项重叠` : ""}`
+            : `${event.title} · ${level} 项同时重叠 · ${heat.label}`
+        }
         style={{
           "--event-ink": heat.text,
           "--event-heat": heat.gradient,
@@ -563,6 +654,15 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
           <span className="event-time">{info.timeText}</span>
         )}
         <span className="event-name">{event.title}</span>
+        {cog && cog.score >= 4 && (
+          <span
+            className="event-cog-badge"
+            data-score={cog.score}
+            title={`认知耗能：${cog.label} (Lv.${cog.score})`}
+          >
+            {cog.level.short}
+          </span>
+        )}
         <span
           className="event-category-dot"
           title={`分类：${category.label}`}
@@ -584,6 +684,7 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
     const cell = e.target.closest("[data-date]");
     if (!cell) return;
     e.preventDefault();
+    dwell.close();
     let minutes = null;
     if (cell.classList.contains("fc-timegrid-col")) {
       const rect = cell.getBoundingClientRect();
@@ -594,17 +695,30 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
       const raw = startMin + ((e.clientY - rect.top) / rect.height) * (endMin - startMin);
       minutes = Math.max(startMin, Math.min(endMin, Math.round(raw / 15) * 15));
     }
+    const date = cell.dataset.date;
+    const isDayCell = !cell.classList.contains("fc-timegrid-col");
+    const dayEvents = isDayCell
+      ? (dayCells?.lists.get(date) ??
+        visibleEvents.filter((ev) => eventOnDay(ev, date)).sort(byDayOrder))
+      : [];
     onContext({
       x: e.clientX,
       y: e.clientY,
-      date: cell.dataset.date,
+      date,
       minutes,
       allDay: minutes == null,
+      events: dayEvents,
     });
   };
-  return (
+  const dialContextValue = useMemo(
+    () => ({ events, onEdit, onCreate, onDelete, aiWeights, energyMode }),
+    [events, onEdit, onCreate, onDelete, aiWeights, energyMode],
+  );
+  globalThis.__EC_DIAL_STATE__ = dialContextValue;
+  const calendar = (
     <div
       className={`time-canvas ${gesture ? "is-interacting" : ""}`}
+      ref={canvas}
       data-heat-tween={HEAT_TWEEN ? "" : undefined}
       onContextMenu={openSlotMenu}
       onPointerOver={overPreview}
@@ -619,11 +733,13 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
           <kbd>Esc 取消</kbd>
         </div>
       )}
+      <DialContext.Provider value={dialContextValue}>
       <FullCalendar
         ref={ref}
         plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
         locale={zhCn}
         initialView={view}
+        views={dialViews}
         headerToolbar={false}
         height="100%"
         firstDay={settings.weekStart}
@@ -763,16 +879,18 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
         }}
         eventResizeStop={endGesture}
         eventDidMount={(info) => {
-          info.el.title = `${info.event.title} · 点击编辑，拖动改期`;
+          info.el.title = `${info.event.title} · 点击编辑，右键删除，拖动改期`;
           info.el.tabIndex = 0;
           info.el.setAttribute("role", "button");
           info.el.setAttribute(
             "aria-label",
-            `${info.event.title}，回车编辑，右键打开操作菜单`,
+            `${info.event.title}，回车编辑，右键删除`,
           );
           info.el.oncontextmenu = (e) => {
             e.preventDefault();
-            onContext({ id: info.event.id, x: e.clientX, y: e.clientY });
+            e.stopPropagation();
+            if (onDeleteRef.current) onDeleteRef.current(info.event.id);
+            else onContextRef.current?.({ id: info.event.id, x: e.clientX, y: e.clientY });
           };
           info.el.onkeydown = (e) => {
             if (e.key === "Enter" || e.key === " ") {
@@ -788,6 +906,12 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
         }}
         moreLinkContent={(arg) => `+${arg.num} 项`}
       />
+      </DialContext.Provider>
+    </div>
+  );
+  return (
+    <>
+      {calendar}
       <DayPreview
         open={dwell.open}
         cardRef={dwell.cardRef}
@@ -801,6 +925,7 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
           onEdit(event.id, rect);
           dwell.close();
         }}
+        onDelete={onDelete}
         onRowPointerDown={view === "dayGridMonth" ? startRowDrag : undefined}
         hidden={Boolean(chip)}
         emptyHint={
@@ -808,7 +933,7 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
         }
       />
       <DragChip drag={chip} pointerX={chipX} pointerY={chipY} />
-    </div>
+    </>
   );
 });
 export default CalendarCanvas;

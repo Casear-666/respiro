@@ -6,6 +6,7 @@ const {
   shell,
   protocol,
   net,
+  safeStorage,
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -29,6 +30,8 @@ const profileArg = process.argv.find((arg) => arg.startsWith("--profile="));
 if (profileArg && !app.isPackaged)
   app.setPath("userData", path.resolve(profileArg.slice(10)));
 let database,
+  accounts,
+  quitReady = false,
   window,
   closing = false,
   closeTimer;
@@ -52,6 +55,14 @@ else {
         const { smokeFixtures } = require("./smoke.cjs");
         database.apply({ upserts: smokeFixtures().events });
       }
+      const startAccounts = async () => {
+        const { createDesktopAccounts } = await import("./accounts.js");
+        accounts = createDesktopAccounts({ dataPath, localDatabase: database, safeStorage,
+          onChange: (state) => { if (window && !window.isDestroyed()) window.webContents.send("calendar:sync-changed", state); } });
+        await accounts.restore();
+      };
+      await startAccounts();
+      const storage = () => accounts?.database() ?? database;
       const distPath = path.resolve(__dirname, "../dist");
       protocol.handle("calendar", (request) => {
         const url = new URL(request.url);
@@ -80,6 +91,8 @@ else {
           nodeIntegration: false,
           contextIsolation: true,
           sandbox: true,
+          backgroundThrottling: !smoke,
+          offscreen: smoke,
         },
       });
       const devURL = !app.isPackaged && process.env.CALENDAR_DEV_URL;
@@ -97,18 +110,25 @@ else {
             throw new Error("无效的应用请求");
           return callback(...args);
         });
-      handle("calendar:list", () => database.list());
-      handle("calendar:apply", (changes) => database.apply(changes));
+      handle("calendar:list", () => storage().list());
+      handle("calendar:apply", (changes) => { const result = storage().apply(changes); accounts?.changed(); return result; });
+      handle("calendar:sync-info", () => accounts?.info() ?? { phase: "local", conflicts: [] });
+      handle("calendar:sync-now", () => accounts?.run());
+      handle("calendar:login", (input) => accounts.login(input));
+      handle("calendar:register", (input) => accounts.register(input));
+      handle("calendar:auth-options", (input) => accounts.authOptions(input));
+      handle("calendar:logout", () => accounts.logout());
+      handle("calendar:resolve", (input) => accounts.resolve(input));
       handle("calendar:info", () => ({
         version: app.getVersion(),
-        dataPath,
+        dataPath: accounts?.info().dataPath ?? dataPath,
         desktop: true,
       }));
-      handle("calendar:settings", () => database.getSettings());
+      handle("calendar:settings", () => storage().getSettings());
       handle("calendar:set-settings", (settings) =>
-        database.setSettings(settings),
+        storage().setSettings(settings),
       );
-      handle("calendar:open-data", () => shell.openPath(dataPath));
+      handle("calendar:open-data", () => shell.openPath(accounts?.info().dataPath ?? dataPath));
       handle("calendar:export", async () => {
         const { canceled, filePath } = await dialog.showSaveDialog(window, {
           title: "备份日历",
@@ -117,7 +137,7 @@ else {
         });
         if (canceled) return { canceled: true };
         const tmp = `${filePath}.tmp`;
-        fs.writeFileSync(tmp, database.export(), "utf8");
+        fs.writeFileSync(tmp, storage().export(), "utf8");
         fs.renameSync(tmp, filePath);
         return { ok: true };
       });
@@ -132,7 +152,8 @@ else {
           throw new Error("文件超过 20 MB");
         // The file is completely validated before any transaction is committed.
         const raw = fs.readFileSync(filePaths[0], "utf8");
-        const prepared = database.prepareImport(raw);
+        const target = storage();
+        const prepared = target.prepareImport(raw);
         const { response } = await dialog.showMessageBox(window, {
           type: "question",
           title: "导入日历",
@@ -144,12 +165,14 @@ else {
           cancelId: 1,
         });
         if (response !== 0) return { canceled: true };
+        if (target !== storage()) throw new Error("账号已改变，请重新导入");
         fs.writeFileSync(
-          path.join(dataPath, `before-import-${Date.now()}.json`),
-          database.export(),
+          path.join(accounts?.info().dataPath ?? dataPath, `before-import-${Date.now()}.json`),
+          target.export(),
           "utf8",
         );
-        return prepared.commit();
+        if (target !== storage()) throw new Error("账号已改变，请重新导入");
+        const result = prepared.commit(); accounts?.changed(); return result;
       });
       ipcMain.on("calendar:close-ready", (event) => {
         if (event.sender !== window.webContents) return;
@@ -167,6 +190,7 @@ else {
       window.once("ready-to-show", () => {
         if (!smoke) window.show();
       });
+      window.on("focus", () => accounts?.run());
       window.on("close", (event) => {
         if (closing) return;
         event.preventDefault();
@@ -184,12 +208,40 @@ else {
       if (smoke) {
         const { verifyHeat, verifyIpc } = require("./smoke.cjs");
         const initial = await verifyHeat(window, false);
+        if (process.env.CALENDAR_SMOKE_LIGHT_SCREENSHOT) fs.writeFileSync(process.env.CALENDAR_SMOKE_LIGHT_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
         await verifyIpc(window);
         // Reopen SQLite and reload the bundled application to rule out memory-only saves.
+        await accounts.close();
         database.close();
         database = openCalendarDatabase(path.join(dataPath, "calendar.sqlite"));
+        await startAccounts();
         await window.loadURL("calendar://app/index.html");
         const restored = await verifyHeat(window, true);
+        const { verifySyncUi, verifyCloud } = require("./smoke.cjs");
+        await verifySyncUi(window);
+        if (process.env.CALENDAR_SMOKE_SCREENSHOT) fs.writeFileSync(process.env.CALENDAR_SMOKE_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
+        if (process.env.CALENDAR_SMOKE_SERVER_ORIGIN) {
+          const { prepareRegistration, finishDesktopRegistration, finishWebRegistration } = require("./smoke.cjs");
+          await prepareRegistration(window, process.env.CALENDAR_SMOKE_SERVER_ORIGIN, process.env.CALENDAR_SMOKE_PASSWORD);
+          if (process.env.CALENDAR_SMOKE_REGISTRATION_SCREENSHOT) fs.writeFileSync(process.env.CALENDAR_SMOKE_REGISTRATION_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
+          await finishDesktopRegistration(window);
+          const webWindow = new BrowserWindow({ show: false, width: 1000, height: 850,
+            webPreferences: { offscreen: true, backgroundThrottling: false, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+          try {
+            await webWindow.loadURL(process.env.CALENDAR_SMOKE_SERVER_ORIGIN);
+            await prepareRegistration(webWindow, process.env.CALENDAR_SMOKE_SERVER_ORIGIN, process.env.CALENDAR_SMOKE_PASSWORD, false);
+            await finishWebRegistration(webWindow);
+          } finally { webWindow.destroy(); }
+          console.log("REGISTRATION_SMOKE_OK", JSON.stringify({ desktopForm: true, webForm: true, autoLogin: true, isolatedCalendar: true, cloudWrite: true }));
+          await verifyCloud(window, process.env.CALENDAR_SMOKE_SERVER_ORIGIN, process.env.CALENDAR_SMOKE_PASSWORD);
+          const stored = JSON.parse(fs.readFileSync(path.join(dataPath, "sync-session.json"), "utf8"));
+          if (JSON.stringify(stored).includes("calendar_session=")) throw new Error("Session persisted without encryption");
+          await accounts.close(); await startAccounts(); await accounts.run();
+          if (accounts.info().phase !== "synced" || accounts.database().list().length !== 1) throw new Error("Account session did not restore");
+          await accounts.logout();
+          if (accounts.database().list().length !== 3) throw new Error("Local account isolation failed");
+          console.log("DESKTOP_SYNC_SMOKE_OK", JSON.stringify({ encryptedSession: Boolean(stored.encryptedCookie), restoredProfile: true, cloudRoundTrip: true, logoutIsolation: true }));
+        }
         console.log(
           "DESKTOP_SMOKE_OK",
           JSON.stringify({
@@ -228,6 +280,11 @@ else {
       return;
     }
     clearTimeout(closeTimer);
+    if (accounts && !quitReady) {
+      event.preventDefault();
+      accounts.close().finally(() => { quitReady = true; app.quit(); });
+      return;
+    }
     database?.close();
     database = null;
   });

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>精力日历 · 新视图试选</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f1e8;color:#283c36;font:15px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:1000px;margin:auto;padding:6vh 5vw}header,.line,nav,.actions{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}header{border-bottom:1px solid #cacdc3;padding-bottom:14px}small,label{color:#606e64}h1{font:500 clamp(28px,5vw,48px)/1.25 Georgia,serif;margin:30px 0 15px}nav{justify-content:start;margin:20px 0}button{font:inherit;color:inherit;cursor:pointer;border:1px solid #b9c4b7;background:#fffdf4;border-radius:7px;padding:6px 12px}button[aria-pressed=true]{background:#294c41;color:white}button:focus-visible,a:focus-visible{outline:3px solid #bc722e;outline-offset:2px}article{background:#fffdf6;border:1px solid #cdd0c4;padding:clamp(14px,3vw,32px);border-radius:14px}h2,p{margin:0}.stage{margin:26px 0;overflow:auto}.matrix{display:grid;grid-template-rows:repeat(7,1fr);grid-auto-flow:column;grid-template-columns:repeat(13,1fr);gap:4px}.tile{height:32px;padding:0;background:var(--color);border:0;border-radius:4px;font-size:11px}.tile[aria-pressed=true]{background:var(--color);box-shadow:inset 0 0 0 3px #264839;color:#21342e}.wheel{width:min(100%,320px);aspect-ratio:1;margin:auto;border-radius:50%;position:relative;display:grid;place-items:center}.hub{background:#fffdf6;width:75%;height:75%;border-radius:50%;display:grid;place-content:center;text-align:center}.hub b{font:38px Georgia,serif}.hour{position:absolute;font-size:12px;transform:translate(-50%,-50%);pointer-events:none}.lane{position:relative;margin:8px 0 8px 42px;background:repeating-linear-gradient(90deg,#d1d6c8 0 1px,transparent 1px 25%),#f0f1e7;height:34px;border-radius:4px}.lane strong{position:absolute;right:calc(100% + 8px);white-space:nowrap}.block{position:absolute;top:7px;height:20px;background:#8ba08a;border-radius:4px}.lane[aria-current=true]{outline:2px solid #b57745}.lane button{position:absolute;inset:0;background:transparent;border:0}.axis{margin-left:42px;display:flex;justify-content:space-between;font-size:12px}.agenda{padding:16px 0;border-top:1px solid #d9dccf;min-height:74px}.agenda p{margin:3px 0}a{color:#39634d}.actions{justify-content:flex-start}.pick{margin-top:16px}.quiet{color:#657366;font-size:13px}
+</style>
+<main><header><b>精力日历</b><small>视图设计试选 · 示例数据</small></header><h1>换一种方式看时间</h1><nav aria-label="模板"></nav>
+<article><div class="line"><h2 id="title"></h2><div><button id="prev" aria-label="上一时段">←</button> <button id="next" aria-label="下一时段">→</button></div></div><p id="hint"></p><div class="stage"></div><div class="agenda" aria-live="polite"></div>
+<div class="actions"><a id="source" target="_blank" rel="noopener">设计参考 ↗</a><button id="pick">选择这个模板</button></div></article><p class="pick" role="status"></p></main>
+<script>
+const $=s=>document.querySelector(s);
+const views=['D · 精力地图','E · 昼夜表盘','F · 留白时间轴'];
+const hints=['每列一周，第一行为周一。暖色越深，安排越多。点任意日期看安排。','从顶部零点顺时针读满 24 小时。彩色弧段是安排，浅色弧段是留白。','每行一天，共用 08—20 时刻度。找一段连续空档，再点当天查看。'];
+const sources=['https://observablehq.com/@d3/calendar','https://observablehq.com/@d3/radial-stacked-bar-chart','https://visjs.github.io/vis-timeline/examples/timeline/'];
+const palette=['#e9ede1','#cad7bd','#e3ce9f','#dba97c','#c78e78'];
+const slots=[[9,10,'整理阅读笔记'],[11,12,'项目讨论'],[14,16,'GIS 实验'],[17,19,'摄影练习']];
+let mode=0,day=4,week=0;
+const stamp=d=>new Date(Date.UTC(2026,10,16+d));
+const date=d=>stamp(d).toISOString().slice(0,10);
+const mod=(v,n)=>(v%n+n)%n;
+function events(d){const seed=mod(d*17+Math.floor(d/7)*3,31);return slots.filter((_,i)=>seed & (1<<i))}
+function choose(d){day=d;render()}
+function render(){
+ const stage=$('.stage');stage.replaceChildren();$('#source').href=sources[mode];
+ const start=mode===0?Math.floor(week/13)*91:week*7;
+ $('#title').textContent=mode===1?date(day):date(start)+' — '+date(start+(mode===0?90:6));
+ $('#hint').textContent=hints[mode];const entries=events(day);
+ document.querySelectorAll('nav button').forEach((b,i)=>b.setAttribute('aria-pressed',i===mode));
+ if(mode===0){
+  const matrix=document.createElement('div');matrix.className='matrix';
+  for(let d=start;d<start+91;d++){const b=document.createElement('button');b.className='tile';b.style.setProperty('--color',palette[events(d).length]);b.textContent=stamp(d).getUTCDate();b.title=b.ariaLabel=date(d)+' · '+events(d).length+'项';b.setAttribute('aria-pressed',d===day);b.onclick=()=>{week=Math.floor(d/7);choose(d);matrix.isConnected||document.querySelector('.tile[aria-pressed=true]').focus()};matrix.append(b)}stage.append(matrix);
+ }else if(mode===1){
+  const wheel=document.createElement('div');wheel.className='wheel';const arcs=[];let cursor=0;
+  for(const [from,to] of entries){arcs.push('#e6e8dc '+cursor+'deg '+from*15+'deg','#a67854 '+from*15+'deg '+to*15+'deg');cursor=to*15}
+  arcs.push('#e6e8dc '+cursor+'deg 360deg');wheel.style.background='conic-gradient('+arcs.join(',')+')';
+  const hub=document.createElement('div');hub.className='hub';hub.innerHTML='<b>'+entries.reduce((sum,e)=>sum+e[1]-e[0],0)+' h</b>已安排';wheel.append(hub);
+  [0,6,12,18].forEach(h=>{const label=document.createElement('b');label.className='hour';label.textContent=h;label.style.left=(50+43*Math.sin(h*Math.PI/12))+'%';label.style.top=(50-43*Math.cos(h*Math.PI/12))+'%';wheel.append(label)});stage.append(wheel);
+ }else{
+  const axis=document.createElement('div');axis.className='axis';axis.innerHTML='<span>08</span><span>11</span><span>14</span><span>17</span><span>20</span>';stage.append(axis);
+  for(let d=start;d<start+7;d++){const lane=document.createElement('div');lane.className='lane';lane.setAttribute('aria-current',day===d);const title=document.createElement('strong');title.textContent='周'+'一二三四五六日'[d-start];lane.append(title);
+   for(const [from,to] of events(d)){const block=document.createElement('span');block.className='block';block.style.left=(from-8)/12*100+'%';block.style.width=(to-from)/12*100+'%';lane.append(block)}
+   const b=document.createElement('button');b.ariaLabel=date(d)+' 查看安排';b.onclick=()=>{choose(d);document.querySelector('.lane[aria-current=true] button').focus()};lane.append(b);stage.append(lane)}
+ }
+ const agenda=$('.agenda');agenda.replaceChildren();const heading=document.createElement('b');heading.textContent=date(day)+' · '+entries.length+' 项安排';agenda.append(heading);
+ for(const [from,to,title] of entries){const p=document.createElement('p');p.textContent=from+':00 — '+to+':00　'+title;agenda.append(p)}
+ if(!entries.length)agenda.append('　全天留白');
+}
+views.forEach((name,i)=>{const b=document.createElement('button');b.textContent=name;b.onclick=()=>{mode=i;render()};$('nav').append(b)});
+function shift(n){day+=n*[91,1,7][mode];week=Math.floor(day/7);render()}
+$('#prev').onclick=()=>shift(-1);$('#next').onclick=()=>shift(1);
+$('#pick').onclick=()=>{const msg='我的选择：'+views[mode]+'。将这个选项发给我即可。';$('.pick').textContent=msg;try{localStorage.setItem('ec-concept-choice',msg)}catch{}};
+try{$('.pick').textContent=localStorage.getItem('ec-concept-choice')||''}catch{}render();
+</script></html>

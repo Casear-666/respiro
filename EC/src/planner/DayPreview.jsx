@@ -9,12 +9,11 @@ import {
   AnimatePresence,
   animate,
   motion,
-  useMotionValue,
   useReducedMotion,
   useSpring,
 } from "framer-motion";
 import { GripVertical } from "lucide-react";
-import { categoryOf, formatTime } from "../../shared/domain";
+import { categoryOf, eventCognitiveInfo, formatTime } from "../../shared/domain";
 import { energyForCount } from "../../shared/energy";
 
 export const DWELL = {
@@ -25,11 +24,8 @@ export const DWELL = {
   grace: 150,
 };
 export const PREVIEW_MOTION = {
-  enter: { type: "spring", stiffness: 400, damping: 30 },
+  enter: { duration: 0.12, ease: "easeOut" },
   exit: { duration: 0.14, ease: [0.4, 0, 1, 1] },
-  move: { type: "spring", stiffness: 520, damping: 42 },
-  offset: 6,
-  scale: 0.96,
   gap: 8,
   edge: 12,
 };
@@ -104,18 +100,18 @@ export function useDwell({ onLift }) {
       warm ? DWELL.warm : DWELL.open,
     );
   };
+  const release = () => {
+    clear("grace");
+    if (openRef.current)
+      timers.current.grace = setTimeout(() => close(), DWELL.grace);
+  };
   const leave = () => {
     clear("lift", "open");
     current.current = null;
-    if (openRef.current)
-      timers.current.grace = setTimeout(() => close(), DWELL.grace);
-    else lift(null);
+    release();
+    if (!openRef.current) lift(null);
   };
   const hold = () => clear("grace");
-  const release = () => {
-    if (openRef.current)
-      timers.current.grace = setTimeout(() => close(), DWELL.grace);
-  };
   useEffect(() => {
     if (!open) return;
     const down = (e) => {
@@ -162,37 +158,28 @@ export function DayPreview({
   placement = "top",
   resolve,
   onEdit,
+  onDelete,
   onRowPointerDown,
   hidden,
   emptyHint,
 }) {
   const reduced = useReducedMotion();
-  const x = useMotionValue(0),
-    y = useMotionValue(0);
-  const first = useRef(true);
-  const [side, setSide] = useState(placement);
+  const positioner = useRef(null);
   const data = open ? resolve(open.key) : null;
+  const rows = data?.events ?? [];
   useLayoutEffect(() => {
-    if (!open) {
-      first.current = true;
-      return;
-    }
-    if (!cardRef.current) return;
-    const card = cardRef.current,
-      r = open.el.getBoundingClientRect();
-    const w = card.offsetWidth,
-      h = card.offsetHeight,
-      vw = window.innerWidth,
+    const layer = positioner.current;
+    if (!open || hidden || !layer) return;
+    const r = open.el.getBoundingClientRect();
+    const { width: w, height: h } = layer.getBoundingClientRect();
+    const vw = window.innerWidth,
       vh = window.innerHeight,
       { edge, gap } = PREVIEW_MOTION;
-    let px,
-      py,
-      nextSide = placement;
+    let px, py;
     if (placement === "right") {
       px = r.right + gap;
       if (px + w > vw - edge && r.left - gap - w >= edge) {
         px = r.left - w - gap;
-        nextSide = "left";
       }
       px = Math.max(edge, Math.min(px, vw - w - edge));
       py = Math.max(edge, Math.min(r.top - 12, vh - h - edge));
@@ -200,45 +187,30 @@ export function DayPreview({
       py = r.top - h - gap;
       if (py < edge) {
         py = r.bottom + gap;
-        nextSide = "bottom";
       }
+      py = Math.max(edge, Math.min(py, vh - h - edge));
       px = Math.max(
         edge,
         Math.min(r.left + r.width / 2 - w / 2, vw - w - edge),
       );
     }
-    if (first.current || reduced) {
-      x.stop();
-      y.stop();
-      x.set(px);
-      y.set(py);
-      first.current = false;
-    } else {
-      animate(x, px, PREVIEW_MOTION.move);
-      animate(y, py, PREVIEW_MOTION.move);
-    }
-    setSide(nextSide);
-    card.style.transformOrigin = `${
-      nextSide === "left" ? "100%" : nextSide === "right" ? "0%" : "50%"
-    } ${nextSide === "bottom" ? "0%" : "100%"}`;
-  }, [open, placement, cardRef, x, y, reduced]);
-  const rows = data?.events ?? [];
+    // Commit the measured position before the browser can paint the new date.
+    layer.style.left = `${px}px`;
+    layer.style.top = `${py}px`;
+    layer.style.visibility = "visible";
+  }, [open, placement, hidden, rows.length]);
   const load = data?.load ?? { count: 0, minutes: 0 },
-    heat = energyForCount(load.count),
+    isCognitive = data?.energyMode === "cognitive",
+    heatCount = isCognitive ? (load.effectiveCount ?? load.count) : load.count,
+    heat = energyForCount(heatCount),
     date = data?.date ?? new Date();
   const draggable = Boolean(onRowPointerDown);
-  const instant = reduced ? { duration: 0 } : undefined;
-  const enter = {
-    opacity: 0,
-    y: reduced ? 0 : side === "bottom" ? -PREVIEW_MOTION.offset : PREVIEW_MOTION.offset,
-    scale: reduced ? 1 : PREVIEW_MOTION.scale,
-  };
   return createPortal(
     <AnimatePresence>
-      {open && data && (
-        <motion.div
-          className={`day-preview${hidden ? " is-hidden" : ""}`}
-          style={{ x, y }}
+      {open && data && !hidden && (
+        <div
+          className="day-preview"
+          ref={positioner}
           key="preview"
         >
           <motion.div
@@ -248,18 +220,14 @@ export function DayPreview({
             aria-label={`${date.getMonth() + 1}月${date.getDate()}日 · 周${weekNames[date.getDay()]} 的安排`}
             data-date={open.key}
             style={{ "--preview-ink": heat.ink }}
-            initial={enter}
+            initial={reduced ? false : { opacity: 0 }}
             animate={{
               opacity: 1,
-              y: 0,
-              scale: 1,
-              transition: reduced ? instant : PREVIEW_MOTION.enter,
+              transition: reduced ? { duration: 0 } : PREVIEW_MOTION.enter,
             }}
             exit={{
               opacity: 0,
-              y: reduced ? 0 : enter.y * 0.5,
-              scale: reduced ? 1 : PREVIEW_MOTION.scale + 0.02,
-              transition: reduced ? instant : PREVIEW_MOTION.exit,
+              transition: reduced ? { duration: 0 } : PREVIEW_MOTION.exit,
             }}
             onPointerEnter={() => !hidden && onHold()}
             onPointerLeave={() => !hidden && onRelease()}
@@ -308,73 +276,84 @@ export function DayPreview({
                   {load.minutes
                     ? ` · 约 ${Number((load.minutes / 60).toFixed(1))} 小时`
                     : ""}
+                  {isCognitive && load.cognitiveSummary && (
+                    <span className="day-preview-cog-summary">
+                      {load.cognitiveSummary}
+                    </span>
+                  )}
                 </>
               ) : (
                 "留白时光"
               )}
             </p>
             {rows.length > 0 && (
-              <ul className="day-preview-list">
-                <AnimatePresence initial={false}>
-                  <motion.li
-                    key={open.key}
-                    style={{ listStyle: "none", padding: 0 }}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1, transition: { duration: 0.12 } }}
-                    exit={{ opacity: 0, transition: { duration: 0.12 } }}
-                  >
-                    <ul className="day-preview-rows">
-                      {rows.map((event) => {
-                        const level = data.levels.get(event.id) || 1;
-                        return (
-                          <li key={event.id}>
-                            <button
-                              type="button"
-                              className={`day-preview-item${event.completed ? " is-complete" : ""}${draggable ? " is-draggable" : ""}`}
-                              data-event-id={event.id}
-                              style={{ "--dot": categoryOf(event).color }}
-                              onPointerDown={
-                                draggable
-                                  ? (e) => onRowPointerDown(event, e)
-                                  : undefined
-                              }
-                              onClick={(e) =>
-                                onEdit(
-                                  event,
-                                  e.currentTarget.getBoundingClientRect(),
-                                )
-                              }
-                            >
-                              {draggable && (
-                                <GripVertical
-                                  size={12}
-                                  className="day-preview-grip"
-                                />
-                              )}
-                              <span className="day-preview-time">
-                                {event.allDay
-                                  ? "全天"
-                                  : `${formatTime(event.start)}–${formatTime(event.end)}`}
-                              </span>
-                              <i className="day-preview-dot" />
-                              <span className="day-preview-title">
-                                {event.title}
-                              </span>
-                              {level > 1 && (
-                                <b
-                                  className="day-preview-conflict"
-                                  aria-label={`${level} 项日程重叠`}
-                                >
-                                  {level}
-                                </b>
-                              )}
-                            </button>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </motion.li>
-                </AnimatePresence>
+              <ul key={open.key} className="day-preview-list">
+                {rows.map((event, index) => {
+                  const level = data.levels.get(event.id) || 1;
+                  const cog = isCognitive
+                    ? eventCognitiveInfo(event, data?.weightsMap)
+                    : null;
+                  return (
+                    <li key={event.id} style={{ "--row-delay": `${Math.min(index, 5) * 35}ms` }}>
+                      <button
+                        type="button"
+                        className={`day-preview-item${event.completed ? " is-complete" : ""}${draggable ? " is-draggable" : ""}`}
+                        data-event-id={event.id}
+                        style={{ "--dot": categoryOf(event).color }}
+                        onPointerDown={
+                          draggable
+                            ? (e) => onRowPointerDown(event, e)
+                            : undefined
+                        }
+                        onClick={(e) =>
+                          onEdit(
+                            event,
+                            e.currentTarget.getBoundingClientRect(),
+                          )
+                        }
+                        onContextMenu={(e) => {
+                          if (!onDelete) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onDelete(event.id);
+                        }}
+                      >
+                        {draggable && (
+                          <GripVertical
+                            size={12}
+                            className="day-preview-grip"
+                          />
+                        )}
+                        <span className="day-preview-time">
+                          {event.allDay
+                            ? "全天"
+                            : `${formatTime(event.start)}–${formatTime(event.end)}`}
+                        </span>
+                        <i className="day-preview-dot" />
+                        <span className="day-preview-title">
+                          {event.title}
+                        </span>
+                        {cog && cog.score >= 4 && (
+                          <span
+                            className="day-preview-cog"
+                            data-score={cog.score}
+                            title={`认知耗能：${cog.label}`}
+                          >
+                            {cog.level.short}
+                          </span>
+                        )}
+                        {level > 1 && (
+                          <b
+                            className="day-preview-conflict"
+                            aria-label={`${level} 项日程重叠`}
+                          >
+                            {level}
+                          </b>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
             {rows.length === 0 && emptyHint && (
@@ -384,7 +363,7 @@ export function DayPreview({
               <p className="day-preview-hint">拖到其他日期即可改期</p>
             )}
           </motion.div>
-        </motion.div>
+        </div>
       )}
     </AnimatePresence>,
     document.body,

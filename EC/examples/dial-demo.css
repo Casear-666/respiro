@@ -1,0 +1,75 @@
+:root {
+  --paper: #f4f3ef;
+  --surface: #fffefa;
+  --surface-alt: #f1f2ef;
+  --ink: #172834;
+  --soft-ink: #354b59;
+  --muted: #5d6d77;
+  --line: #e0e3df;
+  --accent: #326785;
+  --accent-dark: #1c4059;
+  --accent-soft: #e9f1f5;
+  --accent-ink: white;
+  --hover: #f2f5f5;
+  --dial-work: #77b5de;
+  --dial-meeting: #b2a0d5;
+  --dial-personal: #76bcab;
+  --dial-urgent: #e7a172;
+  --dial-other: #a0adb7;
+}
+html, body, #root { min-height: 100%; height: auto; overflow: visible; }
+body { background: var(--paper); color: var(--ink); }
+.tide-shell { width: min(1050px, 100%); margin: auto; padding: 0 clamp(16px, 4vw, 48px) 32px; }
+.tide-mast, .tide-heading, .tide-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.tide-mast { min-height: 68px; border-bottom: 1px solid #d1d7d6; }
+.tide-mast div, .tide-heading nav, .tide-footer button, .tide-legend span { display: inline-flex; align-items: center; gap: 8px; }
+.tide-mast svg { color: var(--accent); }
+.tide-mast b { font-size: 15px; }
+.tide-mast span, .tide-heading p, .tide-footer { color: var(--muted); font-size: 13px; }
+.tide-heading { margin: clamp(24px, 4vw, 46px) 0 22px; align-items: flex-end; }
+.tide-heading h1 { font: 630 clamp(30px, 4.5vw, 46px)/1.13 var(--font-display); letter-spacing: -.045em; margin: 0 0 10px; }
+.tide-heading nav { gap: 0; border: 1px solid #d4d9d7; background: var(--surface); border-radius: 12px; padding: 3px; }
+.tide-heading button, .tide-footer button { cursor: pointer; color: var(--ink); font: inherit; border: 0; background: transparent; border-radius: 8px; padding: 8px; }
+.tide-heading button { display: grid; place-items: center; min-width: 32px; }
+.tide-heading button:hover, .tide-footer button:hover:enabled { background: var(--accent-soft); }
+.tide-card .day-dial { padding: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: stretch; gap: clamp(12px, 2vw, 22px); }
+.tide-card .dial-instrument, .tide-card .dial-agenda { width: 100%; max-width: none; border-radius: 22px; }
+.tide-card .dial-instrument {
+  --muted: #b4c4d2;
+  --dial-track: #435569;
+  color: #e8f0f7;
+  background: radial-gradient(ellipse at 48% 35%, #2a3e52 0%, #1b2c40 62%, #162538);
+  display: grid; align-content: center; justify-items: center; gap: 18px;
+  padding: clamp(20px, 3.1vw, 36px);
+}
+.tide-card .dial-face { width: min(100%, 360px); aspect-ratio: 1; }
+.tide-card .dial-center { inset: 26%; gap: 6px; }
+.tide-card .dial-center strong { color: #faf6ec; white-space: nowrap; font: 400 clamp(26px, 4.1vw, 46px)/1.08 Georgia, serif; font-variant-numeric: lining-nums tabular-nums; }
+.tide-card .dial-center strong small { font: 12px var(--font-ui); margin: 0 3px; }
+.tide-card .dial-center b { color: #faf6ec; }
+.tide-card .dial-agenda { align-self: stretch; padding: clamp(18px, 3vw, 34px); background: var(--surface); border: 1px solid var(--line); }
+.tide-card .dial-agenda header { margin: 0 0 12px; }
+.tide-card .dial-agenda h3 { font: 630 20px/1.4 var(--font-display); }
+.tide-card .dial-add { padding: 7px 11px; background: var(--accent-dark); border-color: transparent; color: white; border-radius: 9px; }
+.tide-card .dial-add:hover { background: var(--accent); }
+.tide-card .dial-entry { min-height: 66px; gap: 13px; padding: 11px 5px; }
+.tide-card .dial-entry i { width: 4px; height: 27px; border-radius: 5px; }
+.tide-card .dial-entry-copy b { font-size: 15px; font-weight: 600; line-height: 1.35; }
+.tide-card .dial-entry-copy time { font-size: 12px; letter-spacing: .035em; }
+.tide-card .dial-chevron { opacity: .5; }
+.tide-card .dial-entry[data-active="true"] .dial-chevron { opacity: 1; }
+.tide-legend { display: flex; gap: 6px 16px; flex-wrap: wrap; justify-content: center; }
+.tide-legend:empty { display: none; }
+.tide-legend span { color: #d3dfe7; font-size: 11px; gap: 5px; }
+.tide-legend i { width: 7px; height: 7px; border-radius: 50%; }
+.tide-footer { padding: 12px 2px; font-size: 12px; }
+.tide-footer button:disabled { opacity: .45; cursor: default; }
+@media (max-width: 700px) {
+  .tide-card .day-dial { grid-template-columns: minmax(0, 1fr); }
+  .tide-card .dial-face { max-width: 285px; }
+  .tide-card .dial-instrument { padding: 16px 18px 20px; gap: 9px; }
+  .tide-card .dial-center strong { font-size: 32px; }
+  .tide-mast { min-height: 52px; }
+  .tide-card .dial-entry { min-height: 58px; }
+}
+

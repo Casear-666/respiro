@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
+import { attachSyncStorage } from "./sync-storage.js";
 import {
   normalizeEvent,
   parseBackup,
@@ -8,17 +9,17 @@ import {
   createBackup,
 } from "../shared/domain.js";
 
-export function openCalendarDatabase(filename) {
+export function openCalendarDatabase(filename, { replica = false } = {}) {
   fs.mkdirSync(path.dirname(filename), { recursive: true });
   const db = new DatabaseSync(filename);
-  if (db.prepare("PRAGMA user_version").get().user_version > 1) {
+  if (db.prepare("PRAGMA user_version").get().user_version > 2) {
     db.close();
     throw new Error("数据库来自更新的版本，请先升级软件");
   }
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    PRAGMA user_version=1;`);
+    `);
   const selectEvents = db.prepare("SELECT payload FROM events");
   const selectSettings = db.prepare("SELECT key,value FROM settings");
   const list = () =>
@@ -41,6 +42,9 @@ export function openCalendarDatabase(filename) {
       throw error;
     }
   };
+  let sync;
+  try { sync = attachSyncStorage({ db, transaction, upsert, remove, replica }); }
+  catch (error) { db.close(); throw error; }
   const prepareImport = (raw) => {
     const incoming = parseBackup(raw);
     return {
@@ -60,8 +64,9 @@ export function openCalendarDatabase(filename) {
     };
   };
   return {
+    sync,
     list,
-    apply({ upserts = [], deletes = [] }) {
+    apply({ upserts = [], deletes = [], bases }) {
       if (
         !Array.isArray(upserts) ||
         !Array.isArray(deletes) ||
@@ -71,8 +76,10 @@ export function openCalendarDatabase(filename) {
       if (upserts.length === 0 && deletes.length === 0) return { ok: true };
       const safe = upserts.map(normalizeEvent);
       transaction(() => {
+        const stale = sync.staleViewIds(bases);
         safe.forEach((e) => upsert.run(e.id, JSON.stringify(e)));
         deletes.forEach((id) => remove.run(String(id)));
+        sync.protectStaleWrites(stale);
       });
       return { ok: true };
     },
@@ -110,6 +117,7 @@ export function openCalendarDatabase(filename) {
       const allowed = [
         "theme",
         "defaultView",
+        "viewsVersion",
         "weekStart",
         "showWeekends",
         "workStart",

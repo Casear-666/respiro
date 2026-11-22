@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  COGNITIVE_LEVELS,
   normalizeEvent,
+  eventCognitiveInfo,
+  eventCognitiveUnits,
   normalizeSettings,
   parseBackup,
   createBackup,
@@ -261,8 +264,65 @@ test("demo data is valid, reproducible within a week and isolated from storage",
   assert.equal(new Set(list.map((e) => e.id)).size, list.length);
   list.forEach((e) => assert.deepEqual(normalizeEvent(e), e));
 });
+test("normalizeSettings migrates legacy defaultView to the dial", () => {
+  assert.equal(normalizeSettings({ defaultView: "dayGridMonth" }).defaultView, "energyDial");
+  assert.equal(normalizeSettings({ defaultView: "dayGridMonth", viewsVersion: 2 }).defaultView, "dayGridMonth");
+  assert.equal(normalizeSettings({ defaultView: "timeGridDay", viewsVersion: 2 }).defaultView, "energyDial");
+  assert.equal(normalizeSettings().viewsVersion, 2);
+});
 test("normalizeSettings defaults confirmBeforeDelete true and preserves false", () => {
   assert.equal(normalizeSettings().confirmBeforeDelete, true);
   assert.equal(normalizeSettings({ confirmBeforeDelete: false }).confirmBeforeDelete, false);
   assert.equal(normalizeSettings({ confirmBeforeDelete: "no" }).confirmBeforeDelete, true);
+});
+test("cognitive energy weighting ranks one 8h deep-work session far heavier than five 5-minute errands", () => {
+  assert.equal(COGNITIVE_LEVELS.length, 5);
+  const errands = Array.from({ length: 5 }, (_, i) =>
+    make(`errand-${i}`, `2026-10-20T09:${String(i * 10).padStart(2, "0")}:00+08:00`, `2026-10-20T09:${String(i * 10 + 5).padStart(2, "0")}:00+08:00`, {
+      title: `取快递 ${i}`,
+      tag: "other",
+    }),
+  );
+  const deepWork = make(
+    "deep-8h",
+    "2026-10-21T09:00:00+08:00",
+    "2026-10-21T17:00:00+08:00",
+    { title: "8小时架构重构攻坚", tag: "work" },
+  );
+  const weightsMap = {
+    ...Object.fromEntries(
+      errands.map((e) => [
+        e.id,
+        { id: e.id, score: 2, expectedScore: 2.0, label: "轻量事务", confidence: 0.9 },
+      ]),
+    ),
+    "deep-8h": {
+      id: "deep-8h",
+      score: 5,
+      expectedScore: 4.8,
+      label: "高压攻坚",
+      confidence: 0.92,
+    },
+  };
+  assert.equal(eventCognitiveInfo(deepWork, weightsMap).source, "ai");
+  assert.ok(
+    eventCognitiveUnits(deepWork, weightsMap) >
+      errands.reduce((s, e) => s + eventCognitiveUnits(e, weightsMap), 0) * 5,
+  );
+  const errandLoad = dayLoad(errands, "2026-10-20", {
+    weightsMap,
+    energyMode: "cognitive",
+  });
+  const deepLoad = dayLoad([deepWork], "2026-10-21", {
+    weightsMap,
+    energyMode: "cognitive",
+  });
+  assert.equal(errandLoad.count, 5);
+  assert.equal(deepLoad.count, 1);
+  assert.ok(deepLoad.cognitiveUnits > errandLoad.cognitiveUnits * 5);
+  assert.ok(deepLoad.effectiveCount > errandLoad.effectiveCount * 3);
+  assert.equal(errandLoad.level, 1);
+  assert.equal(deepLoad.level, 3);
+  assert.match(deepLoad.cognitiveSummary, /高压攻坚/);
+  assert.match(errandLoad.cognitiveSummary, /轻量事务/);
 });

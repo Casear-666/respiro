@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>精力日历 · 动效试选</title>
+<style>
+*{box-sizing:border-box} body{margin:0;background:#f3f0e9;color:#33392f;font:15px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}
+main{max-width:1120px;margin:auto;padding:42px 30px}header,.bar,.month,.foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+header{border-bottom:1px solid #cbc9bc;padding-bottom:17px}header b{font-size:19px}small,.muted{color:#62695e}h1,h2,h3,p{margin:0}h1{font:500 clamp(30px,4vw,49px)/1.3 Georgia,"Songti SC",serif;margin:28px 0 6px}
+button{font:inherit;color:inherit;cursor:pointer}button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid #577959;outline-offset:2px}
+.modes{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:22px 0}.mode{background:#faf8f2;border:1px solid #cccdbf;text-align:left;border-radius:10px;padding:13px 16px}.mode strong{margin-right:8px;font-family:Georgia,serif}.mode[aria-pressed=true]{background:#344637;color:white;border-color:#344637}
+.sheet{background:#fffcf5;border:1px solid #cccdc1;border-radius:15px;overflow:hidden;box-shadow:0 10px 38px #4844330b}
+.bar{padding:14px 22px;border-bottom:1px solid #dbdbcf}.plain,.nav button{border:1px solid #c9ccbe;border-radius:7px;padding:5px 12px;background:#fffcf5}.nav button{font-size:20px;line-height:1.25}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 238px}.calendar{padding:21px;min-width:0}.month{margin-bottom:14px}.month h2{font-family:Georgia,"Songti SC",serif;font-size:26px;font-weight:500}
+.weekday,.grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}.weekday{text-align:center;color:#73776c;font-size:12px;margin:0 0 7px}.viewport{overflow:hidden}.grid{position:relative;isolation:isolate;padding:3px}
+.day,.blank{height:clamp(44px,6vw,66px);border-radius:7px}.day{position:relative;display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;padding:5px 9px;border:0;background:var(--wash);font-variant-numeric:tabular-nums}.day:hover{box-shadow:inset 0 0 0 1px #9b9e8d}.day:focus-visible{outline-offset:-3px}
+.dots{display:flex;align-items:center;gap:3px;line-height:1;font-size:10px}.dots i{width:5px;height:5px;border-radius:50%}.ring{position:absolute;z-index:2;pointer-events:none;border:2px solid #485b43;border-radius:7px;box-shadow:inset 0 0 0 2px #fff9}
+aside{border-left:1px solid #dfdfd2;background:#f6f5ed;padding:22px 18px}aside h3{font:500 40px/1.25 Georgia,serif;margin:8px 0}ul{list-style:none;padding:0;margin:18px 0}li{border-top:1px solid #d7d9cc;padding:9px 0}li time{display:block;color:#667561;font-size:12px;letter-spacing:.07em}.legend{font-size:12px;color:#646b61;margin-top:12px}.foot{padding:14px 20px;background:#eeeee4;border-top:1px solid #dbdbcf}.choices{margin-top:22px}.checks{display:flex;flex-wrap:wrap;gap:14px;margin:8px 0}input{accent-color:#475d43}output{font-weight:600}details{margin:20px 0}summary{cursor:pointer}details a{color:#425b45;margin:6px 15px 4px 0;display:inline-block}
+@media(max-width:700px){main{padding:18px 12px}.layout{grid-template-columns:1fr}aside{border-left:0;border-top:1px solid #dbdbcf}aside ul{margin:8px 0}.calendar{padding:12px}.modes{gap:5px}.mode{padding:8px;font-size:13px}.mode strong{display:block}.day{padding:4px}.bar{padding:12px}}
+</style>
+<main><header><b>精力日历</b><small>交互设计 / 动效试选</small></header>
+<h1>日历动效试选</h1><p class="muted">点选一个方案，直接操作日历，或播放一次示范。</p>
+<div class="modes" aria-label="体验方案"></div>
+<section class="sheet"><div class="bar"><b id="hint"></b><button class="plain" id="play">▷ 播放示范</button></div>
+<div class="layout"><section class="calendar"><div class="month"><h2 id="month"></h2><div class="nav"><button id="prev" aria-label="上个月">‹</button> <button id="next" aria-label="下个月">›</button></div></div>
+<div class="weekday" aria-hidden="true"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+<div class="viewport"><div class="grid" id="grid"></div></div><p class="legend">格底由浅绿到陶红表示日程增多 · 圆点表示类别</p></section>
+<aside><small>当日日程</small><h3 id="date"></h3><p id="loadLabel"></p><ul id="items"></ul></aside></div>
+<div class="foot"><small>使用虚构日程 · 可离线体验</small><label><input type="checkbox" id="slow"> 慢速观察</label></div></section>
+<section class="choices"><h2>我的选择</h2><div class="checks"></div><output aria-live="polite"></output></section>
+<details><summary>查看参考模板</summary><div id="refs"></div></details></main>
+<script>
+const $ = s => document.querySelector(s);
+const names = ['焦点滑移','月份推移','日程浮现'];
+const codes = ['A','B','C'];
+const hints = ['点两个不同日期，观察描边如何移动','点击左右箭头，观察月份切换方向','点有多个圆点的日期，观察日程入场'];
+const sources = [
+ ['DitherUI · 完整日历','https://ditherui.dev/docs/blocks/calendar-blocks'],
+ ['Motion · 共享布局','https://motion.dev/docs/react-layout-animations'],
+ ['Vandor · 微动效','https://vandor-ui.vercel.app/docs/components/calendar'],
+ ['DayPicker · 翻月','https://daypicker.dev/docs/navigation'],
+ ['FullCalendar · 月视图','https://fullcalendar.io/docs/daygrid-view'],
+ ['Radix · 预览浮层','https://www.radix-ui.com/primitives/docs/components/hover-card'],
+ ['shadcn · 日历组件','https://ui.shadcn.com/docs/components/aria/calendar'],
+ ['shadcn.io · 预约选日','https://www.shadcn.io/examples/aria/calendar-as-appointment-picker']
+];
+const tasks = ['整理今日计划','GIS 实验','阅读笔记','项目讨论','整理摄影素材'];
+const colors = ['#80986f','#b38b58','#85899c','#ad7465','#809995'];
+const washes = ['#f2f1e9','#e6ecdf','#ede9d8','#f2e3d1','#efdbcf','#ebcfc7'];
+let mode = 0, month = new Date(2026,10,1), day = 20;
+const grid = $('#grid');
+const ring = document.createElement('span');
+ring.className = 'ring';
+function count(d){return d===20?5:(d*7+Math.floor(d/3)+month.getMonth())%6}
+function animate(el, frames, duration, delay=0){
+ if(!el.animate || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+ const factor = $('#slow').checked ? 2.5 : 1;
+ el.animate(frames,{duration:duration*factor,delay:delay*factor,easing:'cubic-bezier(.2,.72,.2,1)',fill:'backwards'});
+}
+function select(d, glide=false){
+ const old = ring.isConnected ? ring.getBoundingClientRect() : null;
+ day=d;
+ const cell=grid.querySelector('[data-day="'+d+'"]');
+ grid.querySelectorAll('.day').forEach(b=>b.setAttribute('aria-pressed',String(b===cell)));
+ grid.append(ring);
+ Object.assign(ring.style,{left:cell.offsetLeft+'px',top:cell.offsetTop+'px',width:cell.offsetWidth+'px',height:cell.offsetHeight+'px'});
+ ring.getAnimations?.().forEach(a=>a.cancel());
+ const dest=ring.getBoundingClientRect();
+ if(mode===0 && glide && old) animate(ring,[{transform:'translate('+(old.left-dest.left)+'px,'+(old.top-dest.top)+'px)'},{transform:'none'}],330);
+ $('#date').textContent=(month.getMonth()+1)+' / '+d;
+ const n=count(d);
+ $('#loadLabel').textContent=n ? n+' 项安排' : '今天留白';
+ $('#items').replaceChildren();
+ for(let i=0;i<n;i++){
+  const li=document.createElement('li'),time=document.createElement('time');
+  time.textContent=['09:00','10:30','14:00','16:00','19:30'][i];
+  li.append(time,tasks[(d+i)%tasks.length]);$('#items').append(li);
+  if(mode===2 && glide) animate(li,[{opacity:0,transform:'translateY(9px)'},{opacity:1,transform:'none'}],250,i*45);
+ }
+}
+function render(direction=0){
+ grid.getAnimations?.().forEach(a=>a.cancel());grid.replaceChildren();
+ $('#month').textContent=month.getFullYear()+' 年 '+(month.getMonth()+1)+' 月';
+ const start=(month.getDay()+6)%7, days=new Date(month.getFullYear(),month.getMonth()+1,0).getDate();
+ for(let i=0;i<42;i++){
+  const d=i-start+1;
+  if(d<1 || d>days){const blank=document.createElement('span');blank.className='blank';grid.append(blank);continue}
+  const b=document.createElement('button'),n=count(d);
+  b.className='day';b.dataset.day=d;b.textContent=d;b.style.setProperty('--wash',washes[n]);
+  b.setAttribute('aria-label',$('#month').textContent+d+'日，'+n+'项安排');
+  const dots=document.createElement('span');dots.className='dots';
+  for(let j=0;j<Math.min(n,3);j++){const dot=document.createElement('i');dot.style.background=colors[(d+j)%5];dots.append(dot)}
+  if(n>3)dots.append('+'+(n-3));
+  b.append(dots);b.onclick=()=>select(d,true);grid.append(b);
+ }
+ select(Math.min(day,days));
+ if(mode===1 && direction)animate(grid,[{opacity:.25,transform:'translateX('+(direction*34)+'px)'},{opacity:1,transform:'none'}],290);
+}
+function shift(step){month=new Date(month.getFullYear(),month.getMonth()+step,1);render(step)}
+function setMode(index){
+ mode=index;$('#hint').textContent=hints[index];
+ document.querySelectorAll('.mode').forEach((b,i)=>b.setAttribute('aria-pressed',String(i===index)));
+}
+function updateChoices(){
+ const chosen=[...document.querySelectorAll('.checks input:checked')].map(input=>input.value);
+ $('output').textContent=chosen.length?'将这组选项发给我：'+chosen.join(' + '):'勾选想用于正式日历的动效，可多选。';
+ try{localStorage.setItem('ec-motion-picks-v1',JSON.stringify(chosen))}catch{}
+}
+let saved=[];try{saved=JSON.parse(localStorage.getItem('ec-motion-picks-v1'))||[]}catch{}
+names.forEach((name,i)=>{
+ const b=document.createElement('button');b.className='mode';const code=document.createElement('strong');
+ code.textContent=codes[i];b.append(code,name);b.onclick=()=>setMode(i);$('.modes').append(b);
+ const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.value=codes[i];
+ input.checked=Array.isArray(saved)&&saved.includes(codes[i]);input.onchange=updateChoices;label.append(input,' '+codes[i]+' '+name);$('.checks').append(label);
+});
+sources.forEach(([name,url])=>{const a=document.createElement('a');a.textContent=name;a.href=url;a.target='_blank';a.rel='noopener';$('#refs').append(a)});
+$('#prev').onclick=()=>shift(-1);$('#next').onclick=()=>shift(1);
+$('#play').onclick=()=>{if(mode===1)shift(1);else select(mode===2?20:day===20?12:20,true)};
+setMode(0);render();updateChoices();
+new ResizeObserver(()=>select(day)).observe(grid);
+</script></html>

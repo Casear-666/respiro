@@ -178,7 +178,7 @@ test("damaged preferences cannot select an unknown calendar plugin or invalid th
     }),
   );
   const hook = await mount();
-  assert.equal(hook.result.current.settings.defaultView, "dayGridMonth");
+  assert.equal(hook.result.current.settings.defaultView, "energyDial");
   assert.equal(hook.result.current.settings.theme, "light");
   assert.equal(hook.result.current.settings.showWeekends, true);
 });
@@ -196,4 +196,53 @@ test("retrying a saved calendar does not send an empty write", async () => {
   assert.equal(calls, 0);
   assert.equal(hook.result.current.events.length, 1);
   assert.equal(JSON.parse(localStorage.getItem("energy-calendar-v2")).events.length, 1);
+});
+
+test("remote refresh protects drafts, demos and new edits; accepting it resets undo", async () => {
+  const hook = await mount();
+  await act(async () => { hook.result.current.saveEvent(event); await hook.result.current.flush(); });
+  const remote = { ...hook.result.current.events[0], title: "remote" };
+  await originalApply({ upserts: [remote] });
+  hook.result.current.blockRefresh(true);
+  await act(() => hook.result.current.refreshRemote());
+  assert.notEqual(hook.result.current.events[0].title, "remote");
+  hook.result.current.blockRefresh(false);
+  await act(() => hook.result.current.refreshRemote());
+  assert.equal(hook.result.current.events[0].title, "remote");
+  assert.equal(hook.result.current.historyState.undo, false);
+  await act(() => hook.result.current.setDemoMode(true));
+  await act(() => hook.result.current.refreshRemote());
+  assert.equal(hook.result.current.demo, true);
+  await act(() => hook.result.current.setDemoMode(false));
+  let release;
+  repository.readSnapshot = () => new Promise(resolve => { release = () => resolve({ events: [{ ...remote, title: "stale response" }], accept() { throw new Error("must not accept stale versions"); } }); });
+  try {
+    let refreshing;
+    await act(async () => { refreshing = hook.result.current.refreshRemote(); await Promise.resolve(); });
+    await act(async () => { hook.result.current.saveEvent({ ...remote, title: "new local edit" }); });
+    await act(async () => { release(); await refreshing; await hook.result.current.flush(); });
+    assert.equal(hook.result.current.events[0].title, "new local edit");
+  } finally { delete repository.readSnapshot; }
+});
+
+test("reloading another account clears the previous account undo history", async () => {
+  const hook = await mount();
+  await act(async () => { hook.result.current.saveEvent(event); await hook.result.current.flush(); });
+  localStorage.setItem("energy-calendar-v2", JSON.stringify({ events: [] }));
+  await act(() => hook.result.current.reload());
+  assert.equal(hook.result.current.historyState.undo, false);
+  await act(() => hook.result.current.undo());
+  assert.deepEqual(hook.result.current.events, []);
+});
+
+test("account transitions freeze editing until the new space has loaded", async () => {
+  const hook = await mount(); let release, switching;
+  await act(async () => {
+    switching = hook.result.current.switchSpace(() => new Promise(resolve => { release = resolve; }));
+    await Promise.resolve(); await Promise.resolve();
+  });
+  assert.equal(hook.result.current.loading, true);
+  await act(async () => { assert.equal(hook.result.current.saveEvent(event), false); });
+  await act(async () => { release(); await switching; });
+  assert.equal(hook.result.current.loading, false); assert.deepEqual(hook.result.current.events, []);
 });

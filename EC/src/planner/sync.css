@@ -1,0 +1,52 @@
+.sync-login { display: grid; gap: 12px; margin: 16px 0; }
+.sync-login fieldset { display: grid; gap: 12px; border: 0; padding: 0; margin: 0; }
+.sync-login label { display: grid; gap: 6px; font-size: 13px; color: var(--soft-ink); }
+.sync-login input:not([type=checkbox]) {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--surface-alt);
+  color: var(--ink);
+  padding: 9px 11px;
+  border-radius: 8px;
+  transition: border-color var(--dur-fast), box-shadow var(--dur), background-color var(--dur-fast);
+}
+.sync-login input:not([type=checkbox]):focus {
+  outline: 0;
+  border-color: var(--accent);
+  background: var(--surface-raised);
+  box-shadow: var(--ring);
+}
+.sync-login .sync-merge {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  line-height: 1.6;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.sync-login .sync-merge input[type=checkbox] {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+.sync-conflict {
+  border: 1px solid var(--line);
+  background: var(--surface-alt);
+  border-radius: 10px;
+  padding: 14px;
+  margin: 12px 0;
+}
+.sync-versions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.sync-version {
+  min-width: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.sync-version dl { margin: 8px 0; }
+.sync-version dt { opacity: 0.65; font-size: 11px; margin-bottom: 2px; }
+.sync-version dd { margin: 0 0 8px; white-space: pre-wrap; font-weight: 500; }
+.sync-error { color: var(--danger, #d93025); font-size: 13px; }

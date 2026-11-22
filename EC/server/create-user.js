@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { openAccountStore } from "./accounts.js";
+import { passwordError } from "../shared/auth.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const username = process.argv[2];
@@ -13,8 +14,7 @@ const fail = (message) => {
 };
 
 if (!username) fail("用法：npm run server:create-user -- <用户名>");
-if (typeof password !== "string" || password.length < 12 || password.length > 128)
-  fail("请先在环境变量 CALENDAR_ADMIN_PASSWORD 中提供 12–128 个字符的密码");
+if (passwordError(password)) fail(`请在环境变量 CALENDAR_ADMIN_PASSWORD 中提供密码：${passwordError(password)}`);
 
 const store = openAccountStore(path.join(dataDir, "accounts.sqlite"));
 try {

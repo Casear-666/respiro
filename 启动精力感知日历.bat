@@ -7,7 +7,7 @@ if exist "release\win-unpacked\精力日历.exe" (
 )
 where node >nul 2>nul
 if errorlevel 1 (
-  echo 请先安装 release 目录中的 EnergyCalendar-2.0.1-Setup.exe。
+  echo 请先安装 release 目录中的 EnergyCalendar-2.2.0-Setup.exe。
   echo 开发启动需要 Node 24 或更高版本。
   pause
   exit /b 1

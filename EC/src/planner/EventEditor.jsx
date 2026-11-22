@@ -7,16 +7,22 @@ import {
   Clock3,
   Copy,
   CornerDownLeft,
+  RotateCw,
+  Sparkles,
   Tag,
   TextAlignStart,
   Trash2,
   X,
+  Zap,
 } from "lucide-react";
 import {
   CATEGORIES,
+  COGNITIVE_LEVELS,
   DEFAULT_TITLE,
   addDays,
+  cognitiveLevelOf,
   dateKey,
+  eventCognitiveInfo,
   localDate,
   normalizeEvent,
 } from "../../shared/domain";
@@ -41,6 +47,10 @@ export default function EventEditor({
   onClose,
   confirmBeforeDelete,
   onSettings,
+  aiEnabled = false,
+  cognitiveWeight = null,
+  onOverrideWeight,
+  onRescoreWeight,
 }) {
   const existing = draft.event;
   const initial =
@@ -77,6 +87,10 @@ export default function EventEditor({
   const [confirmDelete, setConfirmDelete] = useState(!!draft.confirmDelete),
     [duplicate, setDuplicate] = useState(false),
     [muteDelete, setMuteDelete] = useState(false);
+  const [manualScore, setManualScore] = useState(() =>
+    existing && cognitiveWeight?.manual ? cognitiveWeight.score : null,
+  );
+  const [rescoring, setRescoring] = useState(false);
   const editing = existing && !duplicate;
   const category = CATEGORIES.find((c) => c.id === tag) || CATEGORIES[4];
   const close = useCallback(() => onClose(), [onClose]);
@@ -85,6 +99,69 @@ export default function EventEditor({
     const ms = +localDate(end) - +localDate(start);
     return Number.isFinite(ms) ? ms / 60000 : 0;
   }, [allDay, start, end]);
+  const previewEvent = useMemo(() => {
+    try {
+      return normalizeEvent({
+        id: editing ? existing.id : "draft-preview",
+        title: title || DEFAULT_TITLE,
+        description,
+        tag,
+        allDay,
+        start: allDay ? start : localDate(start),
+        end: allDay ? dateKey(addDays(end, 1)) : localDate(end),
+      });
+    } catch {
+      return {
+        id: editing ? existing.id : "draft-preview",
+        title: title || DEFAULT_TITLE,
+        description,
+        tag,
+        allDay,
+        start: existing?.start || new Date().toISOString(),
+        end: existing?.end || new Date(Date.now() + 3600000).toISOString(),
+      };
+    }
+  }, [editing, existing, title, description, tag, allDay, start, end]);
+  const effectiveCog = useMemo(() => {
+    if (manualScore != null) {
+      const level = cognitiveLevelOf(manualScore);
+      return {
+        score: level.score,
+        expectedScore: level.score,
+        label: level.label,
+        level,
+        source: "manual",
+      };
+    }
+    if (editing && cognitiveWeight && !cognitiveWeight.manual) {
+      return eventCognitiveInfo(previewEvent, {
+        [existing.id]: cognitiveWeight,
+      });
+    }
+    return eventCognitiveInfo(previewEvent, null);
+  }, [manualScore, editing, cognitiveWeight, previewEvent, existing]);
+  const handleRescore = async () => {
+    if (!editing || !onRescoreWeight || rescoring) return;
+    setRescoring(true);
+    setError("");
+    try {
+      const candidate = normalizeEvent({
+        ...existing,
+        title,
+        description,
+        tag,
+        allDay,
+        start: allDay ? start : localDate(start),
+        end: allDay ? dateKey(addDays(end, 1)) : localDate(end),
+      });
+      setManualScore(null);
+      await onRescoreWeight(candidate);
+    } catch (err) {
+      setError(err?.message || "认知负荷评估失败");
+    } finally {
+      setRescoring(false);
+    }
+  };
   const changeAllDay = (value) => {
     setAllDay(value);
     setError("");
@@ -119,6 +196,11 @@ export default function EventEditor({
         start: allDay ? enteredStart : localDate(enteredStart),
         end: allDay ? dateKey(addDays(enteredEnd, 1)) : localDate(enteredEnd),
       });
+      if (manualScore != null) {
+        onOverrideWeight?.(event.id, manualScore);
+      } else if (editing && cognitiveWeight?.manual) {
+        onOverrideWeight?.(event.id, null);
+      }
       onSave(event);
       onClose();
     } catch (err) {
@@ -140,7 +222,7 @@ export default function EventEditor({
             e.currentTarget.requestSubmit();
           }
         }}
-        style={{ "--category": category.color }}
+        style={{ "--category": `var(--dial-${category.id}, ${category.color})` }}
       >
         <div className="editor-top">
           <i aria-hidden="true" />
@@ -218,19 +300,21 @@ export default function EventEditor({
                   />
                 </label>
               </div>
-              <div className="duration-options" aria-label="快速时长">
-                {DURATIONS.map(([minutes, text]) => (
-                  <button
-                    type="button"
-                    className="chip"
-                    key={minutes}
-                    aria-pressed={duration === minutes}
-                    onClick={() => setDuration(minutes)}
-                  >
-                    {text}
-                  </button>
-                ))}
-              </div>
+              {!allDay && (
+                <div className="duration-options" aria-label="快速时长">
+                  {DURATIONS.map(([minutes, text]) => (
+                    <button
+                      type="button"
+                      className="chip"
+                      key={minutes}
+                      aria-pressed={duration === minutes}
+                      onClick={() => setDuration(minutes)}
+                    >
+                      {text}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
@@ -243,13 +327,89 @@ export default function EventEditor({
                   type="button"
                   className="chip"
                   aria-pressed={tag === c.id}
-                  style={{ "--category": c.color, "--category-soft": c.soft }}
+                  style={{ "--category": `var(--dial-${c.id}, ${c.color})`, "--category-soft": c.soft }}
                   onClick={() => setTag(c.id)}
                 >
                   <i />
                   {c.label}
                 </button>
               ))}
+            </div>
+          </div>
+
+          <div className="editor-row">
+            <Zap size={17} aria-hidden="true" />
+            <div>
+              <div className="editor-row-head">
+                <span>认知耗能</span>
+                <span className="cognitive-status-meta">
+                  {effectiveCog.source === "manual" ? (
+                    <>
+                      <span>手动设定</span>
+                      <button
+                        type="button"
+                        className="text-link-button"
+                        onClick={() => {
+                          setManualScore(null);
+                          if (editing && cognitiveWeight?.manual) {
+                            onOverrideWeight?.(existing.id, null);
+                          }
+                        }}
+                      >
+                        恢复自动
+                      </button>
+                    </>
+                  ) : effectiveCog.source === "ai" ? (
+                    <span className="cog-ai-meta">
+                      <Sparkles size={12} aria-hidden="true" />
+                      AI 评估
+                      {Number.isFinite(effectiveCog.confidence) &&
+                      effectiveCog.confidence > 0
+                        ? ` · ${Math.round(effectiveCog.confidence * 100)}%`
+                        : ""}
+                    </span>
+                  ) : (
+                    <span>自动预估</span>
+                  )}
+                  {editing && aiEnabled && (
+                    <button
+                      type="button"
+                      className="cognitive-rescore-btn"
+                      disabled={rescoring}
+                      onClick={handleRescore}
+                      title="结合当前标题、时长与备注重新由 AI 评估"
+                    >
+                      <RotateCw size={12} className={rescoring ? "spin" : ""} />
+                      {rescoring ? "评估中" : "重新评估"}
+                    </button>
+                  )}
+                </span>
+              </div>
+              <div
+                className="cognitive-choices"
+                role="group"
+                aria-label="认知耗能等级"
+              >
+                {COGNITIVE_LEVELS.map((lvl) => {
+                  const pressed = effectiveCog.score === lvl.score;
+                  const isManual = manualScore === lvl.score;
+                  return (
+                    <button
+                      key={lvl.score}
+                      type="button"
+                      className={`chip cognitive-chip${isManual ? " is-manual" : ""}`}
+                      data-score={lvl.score}
+                      aria-pressed={pressed}
+                      onClick={() => setManualScore(isManual ? null : lvl.score)}
+                    >
+                      <i className="cog-level-num" aria-hidden="true">
+                        {lvl.score}
+                      </i>
+                      {lvl.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
 
@@ -306,6 +466,7 @@ export default function EventEditor({
                   onClick={() => {
                     setDuplicate(true);
                     setConfirmDelete(false);
+                    setManualScore(null);
                     setTitle(
                       `${title.trim() || DEFAULT_TITLE}（副本）`.slice(0, 200),
                     );

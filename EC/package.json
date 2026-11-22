@@ -1,7 +1,7 @@
 {
   "name": "energy-aware-calendar",
   "private": true,
-  "version": "2.0.1",
+  "version": "2.2.0",
   "description": "精力日历 — 让时间，留有余地。离线优先的个人桌面日历。",
   "author": "Energy Calendar",
   "main": "desktop/main.cjs",
@@ -14,7 +14,7 @@
     "dev": "vite",
     "server": "node --env-file-if-exists=.env.server server/index.js",
     "server:create-user": "node --env-file-if-exists=.env.server server/create-user.js",
-    "build": "vite build",
+    "build": "node scripts/build-dial-demo.js && vite build",
     "preview": "vite preview",
     "start:offline": "electron .",
     "test": "node --test tests/native/*.test.js",
@@ -23,9 +23,12 @@
     "desktop:preview": "npm run build && electron .",
     "desktop:pack": "npm run build && electron-builder --win --x64 --dir",
     "desktop:dist": "npm run build && electron-builder --win nsis --x64",
-    "desktop:smoke": "electron . --smoke-test"
+    "desktop:smoke": "electron . --smoke-test",
+    "desktop:sync-smoke": "node scripts/desktop-sync-smoke.js"
   },
   "devDependencies": {
+    "@fontsource-variable/google-sans-flex": "^5.3.2",
+    "@fontsource-variable/noto-sans-sc": "^5.3.1",
     "@fullcalendar/core": "^6.1.20",
     "@fullcalendar/daygrid": "^6.1.20",
     "@fullcalendar/interaction": "^6.1.20",
