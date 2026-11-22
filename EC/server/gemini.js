@@ -12,6 +12,70 @@ export const API_REVISION = "2026-05-20";
 
 const CONTENT_TYPES = new Set(["text", "image", "audio", "document", "video"]);
 
+export function isOpenAiCompatibleBaseUrl(baseUrl) {
+  const clean = String(baseUrl || "").trim().replace(/\/+$/, "");
+  return /\/v1$/i.test(clean) || /compatible-mode/i.test(clean);
+}
+
+function buildOpenAiMessages({ input, systemInstruction, responseFormat }) {
+  const messages = [];
+  let sysText = typeof systemInstruction === "string" ? systemInstruction.trim() : "";
+  if (responseFormat?.schema) {
+    const schemaHint = `请严格仅输出符合以下 JSON Schema 的合法 JSON 对象，不要包含 Markdown 代码块或额外解释：\n${JSON.stringify(responseFormat.schema)}`;
+    sysText = sysText ? `${sysText}\n\n${schemaHint}` : schemaHint;
+  }
+  if (sysText) {
+    messages.push({ role: "system", content: sysText });
+  }
+
+  let userContent = "";
+  if (typeof input === "string") {
+    userContent = input;
+  } else if (Array.isArray(input)) {
+    const rawParts =
+      input.length > 0 && input[0]?.type === "user_input"
+        ? input.flatMap((step) => (Array.isArray(step?.content) ? step.content : []))
+        : input;
+    const mapped = [];
+    for (const part of rawParts) {
+      if (part?.type === "text" && typeof part.text === "string") {
+        mapped.push({ type: "text", text: part.text });
+      } else if (part?.type === "image" && typeof part.data === "string") {
+        const mime = part.mime_type || "image/png";
+        mapped.push({
+          type: "image_url",
+          image_url: { url: `data:${mime};base64,${part.data}` },
+        });
+      } else if (part?.type === "audio" && typeof part.data === "string") {
+        const format = String(part.mime_type || "audio/wav").split("/")[1] || "wav";
+        mapped.push({
+          type: "input_audio",
+          input_audio: { data: part.data, format },
+        });
+      }
+    }
+    if (mapped.length > 0 && mapped.every((p) => p.type === "text")) {
+      userContent = mapped.map((p) => p.text).join("\n");
+    } else {
+      userContent = mapped;
+    }
+  }
+  messages.push({ role: "user", content: userContent });
+  return messages;
+}
+
+function extractOpenAiText(raw) {
+  const content = raw?.choices?.[0]?.message?.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((item) => item?.type === "text" && typeof item.text === "string")
+      .map((item) => item.text)
+      .join("");
+  }
+  return "";
+}
+
 function normalizeInteractionInput(input) {
   if (typeof input === "string") {
     return [{ type: "user_input", content: [{ type: "text", text: input }] }];
@@ -101,6 +165,7 @@ export function createGeminiClient({
   const cleanBaseUrl = String(baseUrl || DEFAULT_BASE_URL)
     .trim()
     .replace(/\/+$/, "");
+  const openAiCompatible = isOpenAiCompatibleBaseUrl(cleanBaseUrl);
   const effectiveTimeoutMs =
     Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
       ? Number(timeoutMs)
@@ -126,8 +191,12 @@ export function createGeminiClient({
         signal: controller.signal,
         headers: {
           "Content-Type": "application/json",
-          "x-goog-api-key": cleanKey,
-          ...(includeApiRevision ? { "Api-Revision": API_REVISION } : {}),
+          ...(openAiCompatible
+            ? { Authorization: `Bearer ${cleanKey}` }
+            : { "x-goog-api-key": cleanKey }),
+          ...(includeApiRevision && !openAiCompatible
+            ? { "Api-Revision": API_REVISION }
+            : {}),
         },
         body: JSON.stringify(payload),
       });
@@ -201,6 +270,26 @@ export function createGeminiClient({
       generationConfig,
       store = false,
     }) {
+      if (openAiCompatible) {
+        const messages = buildOpenAiMessages({
+          input,
+          systemInstruction,
+          responseFormat,
+        });
+        const payload = {
+          model,
+          messages,
+          ...(responseFormat?.mime_type === "application/json"
+            ? { response_format: { type: "json_object" } }
+            : {}),
+        };
+        const raw = await postJson("/chat/completions", payload);
+        return {
+          raw,
+          text: extractOpenAiText(raw),
+          usage: raw?.usage ?? null,
+        };
+      }
       const payload = {
         model,
         input: normalizeInteractionInput(input),

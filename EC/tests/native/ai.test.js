@@ -1261,3 +1261,89 @@ test("per-user AI config supports custom API key/baseUrl vs shared API, masks se
     { ai: { apiKey: "ServerSharedDefaultKey", fetchImpl } },
   );
 });
+
+test("OpenAI-compatible baseUrl (e.g. Alibaba DashScope qwen-plus) uses Bearer auth and /chat/completions", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const body = JSON.parse(init.body);
+    calls.push({ url, headers: init.headers, body });
+    const content =
+      calls.length === 1
+        ? JSON.stringify({
+            events: [
+              {
+                title: "需求评审",
+                start: "2026-11-23T15:00:00+08:00",
+                end: "2026-11-23T16:30:00+08:00",
+                allDay: false,
+                tag: "work",
+              },
+            ],
+            warnings: [],
+          })
+        : JSON.stringify({
+            weights: [{ index: 0, score: 4, confidence: 0.9 }],
+          });
+    return jsonFetchResponse({
+      id: "chatcmpl-test",
+      model: body.model,
+      choices: [{ index: 0, message: { role: "assistant", content } }],
+      usage: { total_tokens: 42 },
+    });
+  };
+
+  await withAiServer(
+    async ({ api, login }) => {
+      const headers = { cookie: (await login("alice")).cookie };
+      const captureRes = await api("/api/ai/quick-capture", {
+        method: "POST",
+        headers,
+        body: { text: "明天下午3点到4点半开需求评审" },
+      });
+      assert.equal(captureRes.status, 200);
+      const captureData = await captureRes.json();
+      assert.equal(captureData.drafts.length, 1);
+      assert.equal(captureData.drafts[0].title, "需求评审");
+
+      const weightRes = await api("/api/ai/cognitive-weight", {
+        method: "POST",
+        headers,
+        body: {
+          events: [
+            {
+              id: "dash-ev-1",
+              title: "架构重构",
+              start: "2026-11-23T09:00:00+08:00",
+              end: "2026-11-23T12:00:00+08:00",
+              tag: "work",
+            },
+          ],
+        },
+      });
+      assert.equal(weightRes.status, 200);
+      const weightData = await weightRes.json();
+      assert.equal(weightData.weights[0].score, 4);
+
+      assert.equal(calls.length, 2);
+      assert.equal(
+        calls[0].url,
+        "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+      );
+      assert.equal(calls[0].headers.Authorization, "Bearer sk-ws-test-key");
+      assert.equal(calls[0].headers["x-goog-api-key"], undefined);
+      assert.equal(calls[0].body.model, "qwen-plus");
+      assert.equal(calls[0].body.response_format?.type, "json_object");
+      assert.equal(calls[1].body.model, "qwen-plus");
+    },
+    {
+      ai: {
+        apiKey: "sk-ws-test-key",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        captureModel: "qwen-plus",
+        transcribeModel: "qwen-plus",
+        decisionModel: "qwen-plus",
+        fetchImpl,
+      },
+    },
+  );
+});
