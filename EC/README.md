@@ -12,6 +12,31 @@
 
 当前构建面向 Windows 10/11 x64。安装包未配置发布者代码签名。
 
+## Android
+
+Android 工程在 `android/`，应用 ID 为 `com.energycalendar.mobile`。移动端使用独立的 `dist-android/` 构建目录。
+本地日历与每个同步账号使用各自的 SQLite 数据库。主题、视图和手动认知耗能调整留在设备上。
+导入可以选择桌面导出的 JSON，导出会打开 Android 系统分享面板。
+
+用 Node 24、JDK 21 和 Android SDK 36 构建。命令行环境按需设置 `JAVA_HOME` 和 `ANDROID_HOME`。
+
+```powershell
+npm ci
+npm run android:apk      # 调试 APK 输出到 artifacts/android/
+npm run android:dev      # 安装并启动到已连接的测试设备
+npm run android:open     # 打开 Android Studio
+npm run android:bundle   # 输出发布用 Android App Bundle
+```
+
+手机同步需要可达的 HTTPS 服务器。Android 原生层复用现有会话 Cookie，
+由 Android Keystore 加密保存。调试 APK 支持用 `adb reverse` 连接电脑上的本地测试服务。
+访问 `http://127.0.0.1:3001` 前先运行 `adb reverse tcp:3001 tcp:3001`。发布构建要求 HTTPS。
+
+AAB 默认输出未签名文件。为自己的签名密钥设置
+`CALENDAR_ANDROID_KEYSTORE`、`CALENDAR_ANDROID_STORE_PASSWORD`、
+`CALENDAR_ANDROID_KEY_ALIAS` 和 `CALENDAR_ANDROID_KEY_PASSWORD` 后，构建会生成签名 AAB。
+版本名来自 `package.json`，版本号按 `major × 1000000 + minor × 1000 + patch` 递增。
+
 ## 使用方式
 
 | 操作           | 方式                                        |

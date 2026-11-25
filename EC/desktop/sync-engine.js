@@ -5,27 +5,31 @@ export async function syncReplica(database, request, { cancelled = () => false }
     let page;
     do {
       alive();
-      const state = database.sync.replicaState();
+      const state = await database.sync.replicaState();
       const query = new URLSearchParams({ since: String(state.cursor), ...(state.epoch ? { epoch: state.epoch } : {}) });
+      alive();
       page = await request(`/api/sync/changes?${query}`);
-      alive(); database.sync.receive(page);
+      alive(); await database.sync.receive(page);
     } while (page.hasMore);
   };
   // Replay uncertain uploads before pulling. Their receipts remain valid even when the remote has advanced.
   const replay = async () => {
     for (let batches = 0; batches < 100; batches++) {
       alive();
-      const operations = database.sync.stage();
+      const operations = await database.sync.stage();
       if (!operations.length) return;
-      const result = await request("/api/sync/push", { epoch: database.sync.replicaState().epoch, operations });
-      alive(); database.sync.acknowledge(result);
+      const { epoch } = await database.sync.replicaState();
+      alive();
+      const result = await request("/api/sync/push", { epoch, operations });
+      alive(); await database.sync.acknowledge(result);
     }
   };
-  if (database.sync.replicaState().epoch) await replay();
+  if ((await database.sync.replicaState()).epoch) await replay();
   await pull();
   await replay();
   await pull();
+  alive();
   const { conflicts } = await request("/api/sync/conflicts");
   alive();
-  return { ...database.sync.replicaState(), conflicts };
+  return { ...(await database.sync.replicaState()), conflicts };
 }

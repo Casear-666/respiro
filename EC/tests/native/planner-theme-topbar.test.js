@@ -128,6 +128,7 @@ test("Option 1 removes permanent sidebar, renders unified topbar + popovers, and
   const dateTrigger = container.querySelector(".date-picker-trigger");
   const filterTrigger = container.querySelector(".filter-trigger");
   const createBtn = container.querySelector(".topbar-create");
+  const aiCaptureBtn = container.querySelector(".ai-capture-trigger");
   const miniPopover = container.querySelector(".mini-calendar-popover[popover]");
   const filterPopover = container.querySelector(".filter-popover[popover]");
   const storageBtn = container.querySelector(".calendar-footer .storage-card");
@@ -135,6 +136,12 @@ test("Option 1 removes permanent sidebar, renders unified topbar + popovers, and
   assert.ok(dateTrigger);
   assert.ok(filterTrigger);
   assert.ok(createBtn);
+  assert.ok(aiCaptureBtn);
+  assert.equal(aiCaptureBtn.getAttribute("aria-disabled"), "true");
+  await act(async () => {
+    fireEvent.click(aiCaptureBtn);
+  });
+  assert.equal(container.querySelector(".search-dialog"), null);
   assert.ok(miniPopover);
   assert.ok(filterPopover);
   assert.ok(storageBtn);

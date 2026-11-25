@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { isDesktop, repository } from "./repository";
+import { isLocalApp, isMobile, repository } from "./repository";
 import { CATEGORIES, uid } from "../../shared/domain.js";
 import { PASSWORD_HINT, PASSWORD_PATTERN, USERNAME_PATTERN, registrationError } from "../../shared/auth.js";
 import "./sync.css";
@@ -12,15 +12,20 @@ export function StorageLabel({ server }) {
     return repository.onChanged?.(setState);
   }, []);
   return <span><strong>{server ? "我的云端日历" : state?.user ? `${state.user.username} 的日历` : "我的本地空间"}</strong>
-    <small>{server ? "已连接服务器" : state?.user ? syncLabel(state) : isDesktop ? "离线可用 · 只属于你" : "网页预览 · 本机保存"}</small></span>;
+    <small>{server ? "已连接服务器" : state?.user ? syncLabel(state) : isLocalApp ? "离线可用 · 只属于你" : "网页预览 · 本机保存"}</small></span>;
 }
-export function SyncStatus() {
+export function SyncStatus({ alertsOnly = false, onOpen }) {
   const [state, setState] = useState(null);
   useEffect(() => {
     const read = () => repository.syncInfo?.().then(setState).catch(() => {});
     read(); const off = repository.onChanged?.(setState); const timer = setInterval(read, 15000);
     return () => { off?.(); clearInterval(timer); };
   }, []);
+  if (alertsOnly) {
+    const n = state?.conflicts?.length || 0;
+    if (!(state && (n || state.phase === "auth" || state.phase === "attention"))) return null;
+    return <button type="button" className="mobile-status-sync" onClick={onOpen}>{n ? `${n} 项同步冲突 · 去处理` : syncLabel(state)}</button>;
+  }
   return state && state.phase !== "local" ? <span> · {syncLabel(state)}{state.conflicts?.length ? ` · ${state.conflicts.length} 项冲突（设置中处理）` : ""}</span> : null;
 }
 function Version({ title, event }) {
@@ -32,7 +37,7 @@ function Version({ title, event }) {
 }
 export default function SyncPanel({ model }) {
   const [state, setState] = useState(null), [error, setError] = useState(""), [busy, setBusy] = useState(false);
-  const [origin, setOrigin] = useState("http://127.0.0.1:3001"), [username, setUsername] = useState(""), [password, setPassword] = useState(""), [mergeLocal, setMerge] = useState(false);
+  const [origin, setOrigin] = useState(isMobile ? "" : "http://127.0.0.1:3001"), [username, setUsername] = useState(""), [password, setPassword] = useState(""), [mergeLocal, setMerge] = useState(false);
   const [register, setRegister] = useState(false), [confirmation, setConfirmation] = useState("");
   const resolution = useRef(null);
   const read = () => repository.syncInfo().then(setState).catch(e => setError(e.message));
@@ -53,8 +58,8 @@ export default function SyncPanel({ model }) {
     <p role="status">{syncLabel(state)}{state?.user ? ` · ${state.user.username}` : ""}</p>
     {state?.origin && <p className="data-help">{state.origin}</p>}
     {state?.message && <p className="data-help">{state.message}</p>}
-    {isDesktop && state?.user && <p className="data-help">待同步 {state.pending + state.inflight} 项 · 账号日程保存在独立本地副本中</p>}
-    {isDesktop && (!state?.user || state.phase === "auth") && <form className="sync-login" onSubmit={e => {
+    {isLocalApp && state?.user && <p className="data-help">待同步 {state.pending + state.inflight} 项 · 账号日程保存在独立本地副本中</p>}
+    {isLocalApp && (!state?.user || state.phase === "auth") && <form className="sync-login" onSubmit={e => {
       e.preventDefault();
       if (busy) return;
       const invalid = register ? registrationError(username, password, confirmation) : "";
@@ -65,8 +70,8 @@ export default function SyncPanel({ model }) {
       }, true);
     }}>
       <fieldset className="auth-fields" disabled={busy}>
-      {!state?.user && <><label>服务器地址<input name="serverOrigin" aria-label="服务器地址" value={origin} onChange={e => setOrigin(e.target.value)} required /></label>
-      <label>用户名<input name="username" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} required
+      {!state?.user && <><label>服务器地址<input name="serverOrigin" aria-label="服务器地址" inputMode="url" autoCapitalize="none" spellCheck={false} placeholder={isMobile ? "https://…" : undefined} value={origin} onChange={e => setOrigin(e.target.value)} required /></label>
+      <label>用户名<input name="username" autoComplete="username" autoCapitalize="none" value={username} onChange={e => setUsername(e.target.value)} required
         maxLength={register ? 64 : undefined} pattern={register ? USERNAME_PATTERN : undefined} title={register ? "3–64 位中文、英文字母、数字或 _ . @ -" : undefined} /></label></>}
       <label>密码<input name="password" type="password" autoComplete={register ? "new-password" : "current-password"} value={password} onChange={e => setPassword(e.target.value)} required
         minLength={register ? 8 : undefined} maxLength={128} pattern={register ? PASSWORD_PATTERN : undefined} title={register ? PASSWORD_HINT : undefined} /></label>
@@ -84,7 +89,7 @@ export default function SyncPanel({ model }) {
       }}>{register ? "已有账号？返回登录" : "没有账号？注册账号"}</button>}
     </form>}
     <div className="data-actions">
-      {isDesktop && state?.user && <><button className="secondary-button" disabled={busy || model.demo} onClick={() => act(() => repository.syncNow())}>立即同步</button>
+      {isLocalApp && state?.user && <><button className="secondary-button" disabled={busy || model.demo} onClick={() => act(() => repository.syncNow())}>立即同步</button>
       <button className="secondary-button" disabled={busy || model.demo} onClick={() => act(() => repository.logout(), true)}>退出账号，返回本地空间</button></>}
     </div>
     {!!state?.conflicts?.length && <p>有 {state.conflicts.length} 项冲突。双方版本已保留，请逐项选择。</p>}

@@ -10,6 +10,8 @@ import {
   useState,
 } from "react";
 import { flushSync } from "react-dom";
+import { App as CapacitorApp } from "@capacitor/app";
+import { Capacitor, SystemBars, SystemBarsStyle } from "@capacitor/core";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { Toaster, toast } from "sonner";
 import {
@@ -34,6 +36,7 @@ import {
   Keyboard,
   Laptop,
   Moon,
+  MoreHorizontal,
   PanelRight,
   Plus,
   Redo2,
@@ -67,7 +70,7 @@ import { energyForCount } from "../../shared/energy";
 import { DayPreview, useDwell, useKeyboardModality } from "./DayPreview";
 import { usePlanner } from "./usePlanner";
 import SyncPanel, { SyncStatus, StorageLabel } from "./SyncPanel";
-import { isDesktop, isServer, repository } from "./repository";
+import { isDesktop, isLocalApp, isMobile, isServer, repository } from "./repository";
 import { useServerSession } from "./ServerGate";
 const CalendarCanvas = lazy(() => import("./CalendarCanvas"));
 import EventEditor from "./EventEditor";
@@ -508,6 +511,8 @@ function TodayPanel({
   onDelete,
   onComplete,
   onCreate,
+  onActions,
+  onPaste,
   onDayView,
 }) {
   const daily = useMemo(
@@ -610,13 +615,20 @@ function TodayPanel({
         <h3>
           当日安排 <span>{daily.length}</span>
         </h3>
-        <IconButton
-          className="sm"
-          label="为这一天添加日程"
-          onClick={() => onCreate(selected)}
-        >
-          <Plus size={16} />
-        </IconButton>
+        <div className="agenda-actions">
+          {onPaste && (
+            <IconButton label="粘贴到这一天" onClick={onPaste}>
+              <ClipboardPaste size={16} />
+            </IconButton>
+          )}
+          <IconButton
+            className="sm"
+            label="为这一天添加日程"
+            onClick={() => onCreate(selected)}
+          >
+            <Plus size={16} />
+          </IconButton>
+        </div>
       </div>
       <div className="agenda-list">
         <AnimatePresence initial={false} mode="popLayout">
@@ -638,7 +650,7 @@ function TodayPanel({
                     if (!onDelete) return;
                     e.preventDefault();
                     e.stopPropagation();
-                    onDelete(event.id);
+                    if (!onActions) onDelete(event.id);
                   }}
                 >
                   <button
@@ -681,6 +693,16 @@ function TodayPanel({
                       </span>
                     </span>
                   </button>
+                  {onActions && (
+                    <IconButton
+                      className="mobile-event-actions"
+                      label={`${event.title}的更多操作`}
+                      aria-haspopup="menu"
+                      onClick={() => onActions(event.id)}
+                    >
+                      <MoreHorizontal size={18} aria-hidden="true" />
+                    </IconButton>
+                  )}
                 </motion.div>
               );
             })
@@ -731,6 +753,7 @@ function SettingsDialog({ model, onClose, onImport, onHelp, onThemeChange }) {
   const [aiSaving, setAiSaving] = useState(false);
   const [aiError, setAiError] = useState("");
   const serverSession = useServerSession();
+  const canConfigureAi = isServer || (isMobile && Boolean(info?.user));
   useEffect(() => {
     setAiMode(aiConfig.mode || "shared");
     setAiBaseUrlInput(aiConfig.customBaseUrl || "");
@@ -742,7 +765,7 @@ function SettingsDialog({ model, onClose, onImport, onHelp, onThemeChange }) {
   const handleAiModeChange = async (nextMode) => {
     setAiError("");
     setAiMode(nextMode);
-    if (nextMode === "shared" || aiConfig.hasCustomKey || !isServer) {
+    if (nextMode === "shared" || aiConfig.hasCustomKey || !canConfigureAi) {
       setAiSaving(true);
       try {
         await model.updateAiConfig?.({ mode: nextMode });
@@ -758,7 +781,7 @@ function SettingsDialog({ model, onClose, onImport, onHelp, onThemeChange }) {
     setAiError("");
     const trimmedKey = aiKeyInput.trim();
     const trimmedUrl = aiBaseUrlInput.trim();
-    if (!trimmedKey && !aiConfig.hasCustomKey && isServer) {
+    if (!trimmedKey && !aiConfig.hasCustomKey && canConfigureAi) {
       setAiError("请输入你的 Gemini API Key");
       return;
     }
@@ -877,6 +900,9 @@ function SettingsDialog({ model, onClose, onImport, onHelp, onThemeChange }) {
       </div>
       <div className="settings-section">
         <h3>AI 智能与 API</h3>
+        {isMobile && !canConfigureAi ? (
+          <p className="data-help">登录服务器账号后可启用文字、图片和语音快建。</p>
+        ) : <>
         <div className="setting-row ai-config-mode-row">
           <span>
             API 来源
@@ -887,7 +913,7 @@ function SettingsDialog({ model, onClose, onImport, onHelp, onThemeChange }) {
                   : "填写你自己的 Gemini API Key 并保存后即可使用"
                 : aiConfig.sharedAvailable
                   ? "当前使用默认提供的服务端 API"
-                  : isServer
+                  : canConfigureAi
                     ? "服务端未配置默认 API Key，可切换并使用你自己的 API"
                     : "在网页服务端登录后可选择使用默认提供的 API 或自己的 API"}
             </small>
@@ -965,20 +991,23 @@ function SettingsDialog({ model, onClose, onImport, onHelp, onThemeChange }) {
             {aiError}
           </p>
         )}
-        {!isServer && (
+        {!isServer && !isMobile && (
           <p className="data-help">
             当前为本地模式；登录网页服务端账号后，API 配置会保存在你的云端账号中并跨设备生效。
           </p>
         )}
+        </>}
       </div>
       <div className="settings-section">
         <h3>数据与备份</h3>
         <p className="settings-description">
           {isDesktop
             ? "日程使用 SQLite 保存在本机，每天启动时自动备份，保留最近 14 份。"
-            : isServer
-              ? "日程保存在服务器，同一账号可在不同设备访问。导入前会保留备份。"
-              : "当前为网页预览，数据保存在此浏览器。桌面版使用独立的本地数据库。"}
+            : isMobile
+              ? "日程保存在此设备，可离线使用。登录后，账号日历会与同一服务器上的设备同步。"
+              : isServer
+                ? "日程保存在服务器，同一账号可在不同设备访问。导入前会保留备份。"
+                : "当前为网页预览，数据保存在此浏览器。桌面版使用独立的本地数据库。"}
         </p>
         {isServer && (
           <p className="settings-description">
@@ -1002,7 +1031,7 @@ function SettingsDialog({ model, onClose, onImport, onHelp, onThemeChange }) {
           >
             <ArrowUpFromLine size={15} /> 导入日程
           </button>
-          {isDesktop && (
+          {typeof repository.openDataFolder === "function" && (
             <button
               type="button"
               className="secondary-button"
@@ -1048,14 +1077,14 @@ function SettingsDialog({ model, onClose, onImport, onHelp, onThemeChange }) {
           </p>
         )}
       </div>
-      {(isDesktop || isServer) && <SyncPanel model={model} />}
+      {(isLocalApp || isServer) && <SyncPanel model={model} />}
       <div className="settings-bottom">
         <span>
           精力日历 {info?.version || "2.2.0"}
           <small>让时间，留有余地。</small>
         </span>
         <button type="button" className="text-button" onClick={onHelp}>
-          <Keyboard size={14} /> 快捷键
+          <Keyboard size={14} /> {isMobile ? "使用帮助" : "快捷键"}
         </button>
       </div>
     </Dialog>
@@ -1097,6 +1126,22 @@ const SHORTCUTS = [
 ];
 
 function HelpDialog({ onClose }) {
+  if (isMobile) {
+    return (
+      <Dialog label="使用帮助" onClose={onClose} className="help-dialog">
+        <div className="dialog-top">
+          <h2>使用帮助</h2>
+          <IconButton label="关闭帮助" onClick={onClose}><X size={18} /></IconButton>
+        </div>
+        <ul className="mobile-help">
+          <li>月视图点日期打开当天清单，长按日期可新建或粘贴日程。</li>
+          <li>周视图点时间格可添加日程，长按日程后拖动可以改期。</li>
+          <li>日视图点表盘上的色带或清单中的日程即可编辑。清单的更多菜单可以复制、完成或删除日程。</li>
+          <li>偏好与数据中可导入或分享 JSON 备份，并登录账号同步。</li>
+        </ul>
+      </Dialog>
+    );
+  }
   return (
     <Dialog label="操作与快捷键" onClose={onClose} className="help-dialog">
       <div className="dialog-top">
@@ -1142,27 +1187,34 @@ export function ContextMenu({
   onDelete,
   onDeleteEvent,
   onDeleteDayEvents,
+  onShowDate,
   onCreateHere,
   onPasteHere,
 }) {
   const ref = useRef(null);
+  const mobileMenu = Boolean(context?.mobile);
   const resolvedDayEvents = dayEvents?.length ? dayEvents : (context?.events ?? []);
   useLayoutEffect(() => {
     const node = ref.current;
     if (!node) return;
-    const left = Math.min(context.x, window.innerWidth - node.offsetWidth - 8);
-    const top = Math.min(context.y, window.innerHeight - node.offsetHeight - 8);
-    node.style.left = `${Math.max(8, left)}px`;
-    node.style.top = `${Math.max(8, top)}px`;
-    node.style.transformOrigin = `${context.x - left}px ${context.y - top}px`;
+    if (!mobileMenu) {
+      const left = Math.min(context.x, window.innerWidth - node.offsetWidth - 8);
+      const top = Math.min(context.y, window.innerHeight - node.offsetHeight - 8);
+      node.style.left = `${Math.max(8, left)}px`;
+      node.style.top = `${Math.max(8, top)}px`;
+      node.style.transformOrigin = `${context.x - left}px ${context.y - top}px`;
+    }
     node.querySelector("button:not(:disabled)")?.focus({ preventScroll: true });
-  }, [context]);
+  }, [context, mobileMenu]);
   const onKeyDown = (e) => {
     const items = [
       ...ref.current.querySelectorAll("button:not(:disabled)"),
     ];
     const i = items.indexOf(document.activeElement);
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (mobileMenu && e.key === "Escape") {
+      e.preventDefault();
+      onClose();
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       const delta = e.key === "ArrowDown" ? 1 : -1;
       items[(i + delta + items.length) % items.length]?.focus();
@@ -1181,19 +1233,20 @@ export function ContextMenu({
   return (
     <motion.div
       ref={ref}
-      className="context-menu"
+      className={`context-menu${mobileMenu ? " mobile-context-menu" : ""}`}
       role="menu"
       aria-label={
         event ? `${event.title} 的操作` : `${context.date || "这一天"} 的操作`
       }
       onKeyDown={onKeyDown}
-      initial={{ opacity: 0, scale: 0.94 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.1 } }}
+      initial={mobileMenu ? { opacity: 0, y: 24 } : { opacity: 0, scale: 0.94 }}
+      animate={mobileMenu ? { opacity: 1, y: 0 } : { opacity: 1, scale: 1 }}
+      exit={mobileMenu ? { opacity: 0, y: 24 } : { opacity: 0, scale: 0.97, transition: { duration: 0.1 } }}
       transition={{ type: "spring", stiffness: 600, damping: 38 }}
     >
       {event ? (
         <>
+          {mobileMenu && <div className="context-menu-label" role="presentation">{event.title}</div>}
           <button type="button" role="menuitem" onClick={act(onEdit)}>
             <SquarePen size={15} /> 编辑日程
           </button>
@@ -1203,11 +1256,11 @@ export function ContextMenu({
           </button>
           <button type="button" role="menuitem" onClick={act(onCopy)}>
             <ClipboardCopy size={15} /> 复制
-            <kbd>{MOD} C</kbd>
+            {!mobileMenu && <kbd>{MOD} C</kbd>}
           </button>
           <button type="button" role="menuitem" onClick={act(onDuplicate)}>
             <Copy size={15} /> 创建副本
-            <kbd>{MOD} D</kbd>
+            {!mobileMenu && <kbd>{MOD} D</kbd>}
           </button>
           <hr />
           <button
@@ -1218,9 +1271,19 @@ export function ContextMenu({
           >
             <Trash2 size={15} /> 删除
           </button>
+          {mobileMenu && (
+            <button type="button" role="menuitem" onClick={onClose}>
+              <X size={15} /> 取消
+            </button>
+          )}
         </>
       ) : (
         <>
+          {mobileMenu && (
+            <button type="button" role="menuitem" onClick={act(onShowDate)}>
+              <CalendarDays size={15} /> 查看当日安排
+            </button>
+          )}
           <button type="button" role="menuitem" onClick={act(onCreateHere)}>
             <Plus size={15} /> 在此新建日程
           </button>
@@ -1231,9 +1294,14 @@ export function ContextMenu({
             onClick={act(onPasteHere)}
           >
             <ClipboardPaste size={15} /> 粘贴到这一天
-            <kbd>{MOD} V</kbd>
+            {!mobileMenu && <kbd>{MOD} V</kbd>}
           </button>
-          {resolvedDayEvents.length > 0 && (
+          {mobileMenu && (
+            <button type="button" role="menuitem" onClick={onClose}>
+              <X size={15} /> 取消
+            </button>
+          )}
+          {!mobileMenu && resolvedDayEvents.length > 0 && (
             <>
               <hr />
               <div className="context-menu-label" role="presentation">
@@ -1309,7 +1377,7 @@ export default function PlannerApp() {
   const [range, setRange] = useState(null),
     [draft, setDraft] = useState(null),
     [dialog, setDialog] = useState(null),
-    [panel, setPanel] = useState(() => window.innerWidth > 1150);
+    [panel, setPanel] = useState(() => !isMobile && window.innerWidth > 1150);
   const [miniOpen, setMiniOpen] = useState(false),
     [filterOpen, setFilterOpen] = useState(false),
     [miniResetTick, setMiniResetTick] = useState(0),
@@ -1320,7 +1388,8 @@ export default function PlannerApp() {
     [categories, setCategories] = useState(CATEGORIES.map((c) => c.id)),
     [context, setContext] = useState(null),
     [flash, setFlash] = useState(null),
-    [resolvedTheme, setResolvedTheme] = useState("light");
+    [resolvedTheme, setResolvedTheme] = useState("light"),
+    [viewDrag, setViewDrag] = useState(null);
   const overlayPanel = useMediaQuery("(max-width: 1150px)");
   model.blockRefresh(Boolean(draft || dialog || context));
   const rangeWaiter = useRef(null),
@@ -1328,11 +1397,24 @@ export default function PlannerApp() {
     clipboard = useRef(null),
     lastEvent = useRef(null),
     selectedRef = useRef(selectedDay),
-    viewRef = useRef(view);
+    viewRef = useRef(view),
+    viewDragPtr = useRef(null),
+    viewDragEnd = useRef(0);
   selectedRef.current = selectedDay;
   viewRef.current = view;
   const api = () => calendarRef.current?.getApi();
+  const aiEntryEnabled = Boolean(model.aiStatus?.enabled);
+  const showAiCaptureEntry = aiEntryEnabled || !isServer;
+  const openAiCapture = useCallback(() => {
+    if (!aiEntryEnabled) {
+      toast("AI 快建当前未启用；本地模式仅保留入口，便于预览和调整布局。");
+      return;
+    }
+    setSearchSeed({ focusAi: true });
+    setDialog("search");
+  }, [aiEntryEnabled]);
   const closeDraft = useCallback(() => setDraft(null), []),
+    closePanel = useCallback(() => setPanel(false), []),
     closeDialog = useCallback(() => {
       setDialog(null);
       setSearchSeed(null);
@@ -1378,6 +1460,42 @@ export default function PlannerApp() {
   const toggleMiniPopover = useCallback(() => {
     miniPopoverRef.current?.togglePopover?.();
   }, []);
+  const backRef = useRef(null);
+  backRef.current = (canGoBack) => {
+    if (context) setContext(null);
+    else if (draft) closeDraft();
+    else if (dialog) closeDialog();
+    else if (miniOpen) closeMiniPopover();
+    else if (filterOpen) filterPopoverRef.current?.hidePopover?.();
+    else if (panel) closePanel();
+    else if (canGoBack) window.history.back();
+    else CapacitorApp.minimizeApp().catch(() => {});
+  };
+  useEffect(() => {
+    if (!isMobile || Capacitor.getPlatform() !== "android") return;
+    const listener = CapacitorApp.addListener("backButton", ({ canGoBack }) => backRef.current(canGoBack));
+    listener.catch(() => {});
+    return () => { listener.then((handle) => handle.remove()).catch(() => {}); };
+  }, []);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!isMobile || !viewport) return;
+    const style = document.documentElement.style;
+    const update = () => {
+      if (viewport.scale !== 1) return;
+      style.setProperty("--mobile-viewport-height", `${viewport.height}px`);
+      style.setProperty("--mobile-viewport-top", `${viewport.offsetTop}px`);
+    };
+    viewport.addEventListener("resize", update);
+    viewport.addEventListener("scroll", update);
+    update();
+    return () => {
+      viewport.removeEventListener("resize", update);
+      viewport.removeEventListener("scroll", update);
+      style.removeProperty("--mobile-viewport-height");
+      style.removeProperty("--mobile-viewport-top");
+    };
+  }, []);
 
   useLayoutEffect(() => {
     if (!model.loading) setView(model.settings.defaultView);
@@ -1401,6 +1519,12 @@ export default function PlannerApp() {
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, [model.settings.theme]);
+  useEffect(() => {
+    if (!isMobile) return;
+    SystemBars.setStyle({
+      style: resolvedTheme === "dark" ? SystemBarsStyle.Dark : SystemBarsStyle.Light,
+    }).catch(() => {});
+  }, [resolvedTheme]);
 
   /** Resolves once FullCalendar reports the new date range (or after a short timeout). */
   const waitForRange = useCallback(
@@ -1545,6 +1669,7 @@ export default function PlannerApp() {
     [resolvedTheme, changeTheme],
   );
   const createForDay = useCallback((date) => {
+    if (isMobile) setPanel(false);
     setDraft({ start: dateKey(date), allDay: true });
   }, []);
   const newEvent = useCallback(
@@ -1569,6 +1694,7 @@ export default function PlannerApp() {
     (id, rect, extra) => {
       const event = model.events.find((e) => e.id === id);
       if (event) {
+        if (isMobile) setPanel(false);
         lastEvent.current = id;
         setDraft({ event, rect, ...extra });
       }
@@ -1598,7 +1724,7 @@ export default function PlannerApp() {
       clipboard.current = { ...rest, completed: false };
       lastEvent.current = id;
       toast(`已复制「${event.title.slice(0, 40)}」`, {
-        description: `${MOD} V 粘贴到所选日期`,
+        description: isMobile ? "在目标日期点粘贴按钮" : `${MOD} V 粘贴到所选日期`,
       });
     },
     [model.events],
@@ -1636,6 +1762,13 @@ export default function PlannerApp() {
     if (ctx.id) lastEvent.current = ctx.id;
     setContext(ctx);
   }, []);
+  const showDay = useCallback((date) => {
+    setSelectedDay(date);
+    setPanel(true);
+  }, []);
+  const openEventActions = useCallback((id, fromEditor = false) => {
+    openContext({ id, mobile: true, fromEditor });
+  }, [openContext]);
   const filtered = useMemo(
     () => model.events.filter((e) => categories.includes(e.tag)),
     [model.events, categories],
@@ -1655,7 +1788,7 @@ export default function PlannerApp() {
     return counts;
   }, [model.events]);
   const importData = () => {
-    if (isDesktop) model.importBackup();
+    if (typeof repository.importBackup === "function") model.importBackup();
     else fileRef.current?.click();
   };
   const today = useCallback(() => navigate(new Date()), [navigate]);
@@ -1883,62 +2016,183 @@ export default function PlannerApp() {
       aiWeights={model.aiWeights}
       energyMode={energyMode}
       onEnergyModeChange={changeEnergyMode}
-      onClose={() => setPanel(false)}
+      onClose={closePanel}
       onEdit={editEvent}
       onDelete={model.deleteEvent}
       onComplete={model.toggleComplete}
       onCreate={createForDay}
+      onActions={isMobile ? openEventActions : undefined}
+      onPaste={isMobile && clipboard.current ? () => pasteTo(selectedDay) : undefined}
       onDayView={() => {
-        if (overlayPanel) setPanel(false);
+        if (isMobile || overlayPanel) closePanel();
         changeView("energyDial");
         navigate(selectedDay);
       }}
     />
   );
 
+  const segAt = (container, clientX) => {
+    const buttons = [...container.querySelectorAll("[data-view]")];
+    if (!buttons.length) return null;
+    const index = buttons.findIndex((b) => {
+      const r = b.getBoundingClientRect();
+      return clientX >= r.left && clientX < r.right;
+    });
+    if (index !== -1) return buttons[index].dataset.view;
+    return clientX < buttons[0].getBoundingClientRect().left
+      ? buttons[0].dataset.view
+      : buttons.at(-1).dataset.view;
+  };
+  const segDragHandlers = isMobile
+    ? {
+        onPointerDown: (e) => {
+          viewDragPtr.current = { id: e.pointerId, x: e.clientX, moved: false, captured: false };
+        },
+        onPointerMove: (e) => {
+          const p = viewDragPtr.current;
+          if (!p || p.id !== e.pointerId) return;
+          if (!p.moved) {
+            if (Math.abs(e.clientX - p.x) <= 6) return;
+            p.moved = true;
+            if (!p.captured) {
+              try {
+                e.currentTarget.setPointerCapture(e.pointerId);
+              } catch {
+                /* capture is best-effort */
+              }
+              p.captured = true;
+            }
+          }
+          setViewDrag(segAt(e.currentTarget, e.clientX));
+        },
+        onPointerUp: (e) => {
+          const p = viewDragPtr.current;
+          viewDragPtr.current = null;
+          if (!p || p.id !== e.pointerId || !p.moved) return;
+          const target = segAt(e.currentTarget, e.clientX);
+          viewDragEnd.current = Date.now();
+          setViewDrag(null);
+          if (target && target !== view) changeView(target);
+        },
+        onPointerCancel: () => {
+          viewDragPtr.current = null;
+          setViewDrag(null);
+        },
+      }
+    : {};
+  const navCluster = (
+    <div className="nav-cluster">
+      <IconButton label="上一段时间" shortcut="←" onClick={() => step(-1)}>
+        <ChevronLeft size={18} />
+      </IconButton>
+      <button
+        type="button"
+        className="today-button"
+        title="回到今天（T）"
+        onClick={today}
+      >
+        今天
+      </button>
+      <IconButton label="下一段时间" shortcut="→" onClick={() => step(1)}>
+        <ChevronRight size={18} />
+      </IconButton>
+    </div>
+  );
+  const viewSwitch = (
+    <div className="segmented" aria-label="日历视图" role="group" {...segDragHandlers}>
+      {viewNames.map((v) => (
+        <button
+          type="button"
+          key={v.id}
+          data-view={v.id}
+          aria-pressed={view === v.id}
+          title={`${v.label}视图（${viewNames.indexOf(v) + 1}）`}
+          onClick={() => {
+            if (Date.now() - viewDragEnd.current < 350) return;
+            changeView(v.id);
+          }}
+        >
+          {(viewDrag ?? view) === v.id && (
+            <motion.span
+              className="segment-highlight"
+              layoutId="view-highlight"
+              transition={{ type: "spring", stiffness: 520, damping: 40 }}
+            />
+          )}
+          <span>{v.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+  const aiCaptureButton = showAiCaptureEntry && (
+    <button
+      type="button"
+      className={`ai-capture-trigger${aiEntryEnabled ? "" : " is-unavailable"}`}
+      aria-label="AI 多模态快建日程"
+      aria-disabled={!aiEntryEnabled}
+      title={
+        aiEntryEnabled
+          ? "AI 快建：输入文字、粘贴截图或语音录入"
+          : "本地布局预览：AI 快建当前未启用"
+      }
+      onClick={openAiCapture}
+    >
+      <Sparkles size={14} />
+      <span>AI 快建</span>
+    </button>
+  );
+  const historyButtons = (
+    <div className="history-buttons">
+      <IconButton
+        label="撤销"
+        shortcut={`${MOD} Z`}
+        disabled={!model.historyState.undo}
+        onClick={model.undo}
+      >
+        <Undo2 size={15} />
+      </IconButton>
+      <IconButton
+        label="重做"
+        shortcut={`${MOD} Shift Z`}
+        disabled={!model.historyState.redo}
+        onClick={model.redo}
+      >
+        <Redo2 size={15} />
+      </IconButton>
+    </div>
+  );
+
   return (
     <MotionConfig reducedMotion="user">
-      <div className="planner-shell">
+      <div className="planner-shell" data-mobile={isMobile ? "" : undefined}>
         <Toaster
-          position="bottom-right"
+          position={isMobile ? "top-center" : "bottom-right"}
           theme={resolvedTheme}
           offset={24}
+          mobileOffset={isMobile ? { top: "calc(var(--safe-top, 0px) + 8px)" } : undefined}
           gap={10}
           toastOptions={{ duration: 3200 }}
         />
         <main className="planner-main">
           <header className="topbar">
             <div className="topbar-left">
-              <a
-                className="topbar-brand"
-                href="#"
-                title="精力日历 · 回到今天（T）"
-                aria-label="精力日历，回到今天"
-                onClick={(e) => {
-                  e.preventDefault();
-                  today();
-                }}
-              >
-                <span className="brand-symbol">
-                  <BrandMark size={18} />
-                </span>
-              </a>
-              <div className="nav-cluster">
-                <IconButton label="上一段时间" shortcut="←" onClick={() => step(-1)}>
-                  <ChevronLeft size={18} />
-                </IconButton>
-                <button
-                  type="button"
-                  className="today-button"
-                  title="回到今天（T）"
-                  onClick={today}
+              {!isMobile && (
+                <a
+                  className="topbar-brand"
+                  href="#"
+                  title="精力日历 · 回到今天（T）"
+                  aria-label="精力日历，回到今天"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    today();
+                  }}
                 >
-                  今天
-                </button>
-                <IconButton label="下一段时间" shortcut="→" onClick={() => step(1)}>
-                  <ChevronRight size={18} />
-                </IconButton>
-              </div>
+                  <span className="brand-symbol">
+                    <BrandMark size={18} />
+                  </span>
+                </a>
+              )}
+              {!isMobile && navCluster}
               <div className="topbar-title">
                 <button
                   type="button"
@@ -1996,110 +2250,106 @@ export default function PlannerApp() {
                   />
                 </div>
               </div>
+              {isMobile && (
+                <button
+                  type="button"
+                  className="mobile-today"
+                  title="回到今天（T）"
+                  onClick={today}
+                >
+                  今天
+                </button>
+              )}
             </div>
             <div className="topbar-right">
-              <div className="segmented" aria-label="日历视图" role="group">
-                {viewNames.map((v) => (
+              {!isMobile && viewSwitch}
+              {!isMobile && (
+                <>
                   <button
                     type="button"
-                    key={v.id}
-                    aria-pressed={view === v.id}
-                    title={`${v.label}视图（${viewNames.indexOf(v) + 1}）`}
-                    onClick={() => changeView(v.id)}
+                    ref={filterTriggerRef}
+                    popoverTarget={filterPopoverId}
+                    className={`filter-trigger ${isFiltered ? "is-filtered" : ""} ${filterOpen ? "is-open" : ""}`}
+                    aria-expanded={filterOpen}
+                    aria-label="筛选日程分类"
+                    title="筛选日程分类"
                   >
-                    {view === v.id && (
-                      <motion.span
-                        className="segment-highlight"
-                        layoutId="view-highlight"
-                        transition={{ type: "spring", stiffness: 520, damping: 40 }}
-                      />
-                    )}
-                    <span>{v.label}</span>
+                    <span className="filter-dots" aria-hidden="true">
+                      {activeCategories.length > 0 ? (
+                        activeCategories.slice(0, 5).map((c) => (
+                          <i key={c.id} style={{ background: c.color }} />
+                        ))
+                      ) : (
+                        <i className="is-empty" />
+                      )}
+                    </span>
+                    <span className="filter-label">{filterLabel}</span>
+                    <ChevronDown size={13} className="trigger-chevron" aria-hidden="true" />
                   </button>
-                ))}
-              </div>
-              <button
-                type="button"
-                ref={filterTriggerRef}
-                popoverTarget={filterPopoverId}
-                className={`filter-trigger ${isFiltered ? "is-filtered" : ""} ${filterOpen ? "is-open" : ""}`}
-                aria-expanded={filterOpen}
-                aria-label="筛选日程分类"
-                title="筛选日程分类"
-              >
-                <span className="filter-dots" aria-hidden="true">
-                  {activeCategories.length > 0 ? (
-                    activeCategories.slice(0, 5).map((c) => (
-                      <i key={c.id} style={{ background: c.color }} />
-                    ))
-                  ) : (
-                    <i className="is-empty" />
-                  )}
-                </span>
-                <span className="filter-label">{filterLabel}</span>
-                <ChevronDown size={13} className="trigger-chevron" aria-hidden="true" />
-              </button>
-              <div
-                id={filterPopoverId}
-                ref={filterPopoverRef}
-                popover="auto"
-                className="topbar-popover filter-popover"
-                aria-label="日程分类筛选"
-              >
-                <div className="sidebar-section-heading">
-                  <span>日程分类</span>
-                  {isFiltered && (
-                    <button
-                      type="button"
-                      onClick={() => setCategories(CATEGORIES.map((c) => c.id))}
-                    >
-                      全部显示
-                    </button>
-                  )}
-                </div>
-                {CATEGORIES.map((c) => {
-                  const on = categories.includes(c.id);
-                  return (
-                    <div
-                      className="category-row"
-                      key={c.id}
-                      style={{ "--category": c.color }}
-                    >
-                      <button
-                        type="button"
-                        className="category-filter"
-                        aria-pressed={on}
-                        onClick={() => chooseCategory(c.id)}
-                      >
-                        <span className={`category-checkbox ${on ? "checked" : ""}`}>
-                          {on && (
-                            <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
-                              <path
-                                d="M2.5 6.2 5 8.6l4.5-5"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                              />
-                            </svg>
-                          )}
-                        </span>
-                        <span>{c.label}</span>
-                        <small>{categoryCounts.get(c.id) || ""}</small>
-                      </button>
-                      <button
-                        type="button"
-                        className="category-only"
-                        aria-label={`仅显示${c.label}`}
-                        onClick={() => setCategories([c.id])}
-                      >
-                        仅此
-                      </button>
+                  <div
+                    id={filterPopoverId}
+                    ref={filterPopoverRef}
+                    popover="auto"
+                    className="topbar-popover filter-popover"
+                    aria-label="日程分类筛选"
+                  >
+                    <div className="sidebar-section-heading">
+                      <span>日程分类</span>
+                      {isFiltered && (
+                        <button
+                          type="button"
+                          onClick={() => setCategories(CATEGORIES.map((c) => c.id))}
+                        >
+                          全部显示
+                        </button>
+                      )}
                     </div>
-                  );
-                })}
-              </div>
+                    {CATEGORIES.map((c) => {
+                      const on = categories.includes(c.id);
+                      return (
+                        <div
+                          className="category-row"
+                          key={c.id}
+                          style={{ "--category": c.color }}
+                        >
+                          <button
+                            type="button"
+                            className="category-filter"
+                            aria-pressed={on}
+                            onClick={() => chooseCategory(c.id)}
+                          >
+                            <span className={`category-checkbox ${on ? "checked" : ""}`}>
+                              {on && (
+                                <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+                                  <path
+                                    d="M2.5 6.2 5 8.6l4.5-5"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                  />
+                                </svg>
+                              )}
+                            </span>
+                            <span>{c.label}</span>
+                            <small>{categoryCounts.get(c.id) || ""}</small>
+                          </button>
+                          <button
+                            type="button"
+                            className="category-only"
+                            aria-label={`仅显示${c.label}`}
+                            onClick={() => setCategories([c.id])}
+                          >
+                            仅此
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+              {isMobile && aiCaptureButton}
               <button
                 type="button"
                 className="search-trigger"
@@ -2115,22 +2365,8 @@ export default function PlannerApp() {
                 </span>
                 <Keys value={`${MOD} K`} />
               </button>
-              {model.aiStatus?.enabled && (
-                <button
-                  type="button"
-                  className="ai-capture-trigger"
-                  aria-label="AI 多模态快建日程"
-                  title="AI 快建：输入文字、粘贴截图或语音录入"
-                  onClick={() => {
-                    setSearchSeed({ focusAi: true });
-                    setDialog("search");
-                  }}
-                >
-                  <Sparkles size={14} />
-                  <span>AI 快建</span>
-                </button>
-              )}
-              <button
+              {!isMobile && aiCaptureButton}
+              {!isMobile && <button
                 type="button"
                 className="topbar-create"
                 disabled={model.loading || !!model.loadError}
@@ -2140,7 +2376,7 @@ export default function PlannerApp() {
               >
                 <Plus size={15} />
                 <span>新建</span>
-              </button>
+              </button>}
               <span className="topbar-divider" />
               <IconButton
                 ref={themeButtonRef}
@@ -2235,51 +2471,27 @@ export default function PlannerApp() {
                       onMove={model.moveEvent}
                       onRange={onRange}
                       onContext={openContext}
+                      onShowDay={isMobile ? showDay : undefined}
+                      onEventActions={isMobile ? openEventActions : undefined}
+                      onSwipe={isMobile ? step : undefined}
+                      onPaste={isMobile && clipboard.current ? () => pasteTo(selectedDay) : undefined}
                       aiWeights={model.aiWeights}
                       energyMode={energyMode}
                     />
                   </Suspense>
-                  <AnimatePresence>
-                    {model.events.length === 0 && (
-                      <motion.div
-                        className="onboarding-card"
-                        initial={{ opacity: 0, y: 16, scale: 0.98 }}
-                        animate={{
-                          opacity: 1,
-                          y: 0,
-                          scale: 1,
-                          transition: { delay: 0.25, type: "spring", stiffness: 380, damping: 32 },
-                        }}
-                        exit={{ opacity: 0, y: 10, transition: { duration: 0.16 } }}
-                      >
-                        <span className="onboarding-mark">
-                          <BrandMark size={24} />
-                        </span>
-                        <div>
-                          <strong>从一小段时间开始</strong>
-                          <p>点击空白处写下安排，拖动它，就能轻松改期。</p>
-                        </div>
-                        <div className="onboarding-actions">
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={importData}
-                          >
-                            <ArrowUpFromLine size={14} /> 导入旧日程
-                          </button>
-                          <button
-                            type="button"
-                            className="primary-button"
-                            onClick={() => model.setDemoMode(true)}
-                          >
-                            <Sparkles size={14} /> 体验示例
-                          </button>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
+                  {isMobile && (
+                    <button
+                      className="mobile-create"
+                      type="button"
+                      aria-label="新建日程"
+                      onClick={() => newEvent()}
+                    >
+                      <Plus size={26} aria-hidden="true" />
+                    </button>
+                  )}
                 </div>
               )}
+              {!isMobile && (
               <footer className="calendar-footer">
                 <div className={`save-indicator ${model.status}`} role="status">
                   <i />
@@ -2291,7 +2503,7 @@ export default function PlannerApp() {
                     </button>
                   ) : model.status === "saving" ? (
                     <span>正在保存…</span>
-                  ) : isDesktop ? (
+                  ) : isLocalApp ? (
                     <><span>已保存在本机</span><SyncStatus /></>
                   ) : isServer ? (
                     <span>已保存到服务器</span>
@@ -2311,28 +2523,12 @@ export default function PlannerApp() {
                   </span>
                   <StorageLabel server={isServer} />
                 </button>
-                <div className="history-buttons">
-                  <IconButton
-                    label="撤销"
-                    shortcut={`${MOD} Z`}
-                    disabled={!model.historyState.undo}
-                    onClick={model.undo}
-                  >
-                    <Undo2 size={15} />
-                  </IconButton>
-                  <IconButton
-                    label="重做"
-                    shortcut={`${MOD} Shift Z`}
-                    disabled={!model.historyState.redo}
-                    onClick={model.redo}
-                  >
-                    <Redo2 size={15} />
-                  </IconButton>
-                </div>
+                {historyButtons}
               </footer>
+              )}
             </div>
             <AnimatePresence>
-              {panel && overlayPanel && (
+              {!isMobile && panel && overlayPanel && (
                 <motion.div
                   key="panel-scrim"
                   className="panel-scrim"
@@ -2344,7 +2540,7 @@ export default function PlannerApp() {
               )}
             </AnimatePresence>
             <AnimatePresence initial={false}>
-              {panel &&
+              {!isMobile && panel &&
                 (overlayPanel ? (
                   <motion.div
                     key="panel-overlay"
@@ -2371,6 +2567,14 @@ export default function PlannerApp() {
                 ))}
             </AnimatePresence>
           </section>
+          {isMobile && (
+            <div className="mobile-tabbar">
+              <div className="mobile-status-strip" role="status">{model.status === "error" && (
+                <button type="button" className="mobile-status-error" onClick={model.retry}>尚未保存 · 重试保存</button>
+              )}{isLocalApp && <SyncStatus alertsOnly onOpen={() => setDialog("settings")} />}</div>
+              <div className="mobile-tabbar-row">{viewSwitch}{historyButtons}</div>
+            </div>
+          )}
         </main>
         <input
           ref={fileRef}
@@ -2388,6 +2592,13 @@ export default function PlannerApp() {
           }}
         />
         <AnimatePresence>
+          {isMobile && panelNode && (
+            <Dialog key="mobile-day" label="当日安排" className="mobile-day-dialog" onClose={closePanel}>
+              {panelNode}
+            </Dialog>
+          )}
+        </AnimatePresence>
+        <AnimatePresence>
           {draft && (
             <EventEditor
               key={draft.event?.id || "new"}
@@ -2403,6 +2614,7 @@ export default function PlannerApp() {
               }
               onOverrideWeight={model.setCognitiveOverride}
               onRescoreWeight={model.rescoreEvent}
+              onActions={isMobile ? (id) => openEventActions(id, true) : undefined}
             />
           )}
         </AnimatePresence>
@@ -2451,7 +2663,7 @@ export default function PlannerApp() {
           {context && (
             <div
               key="context-scrim"
-              className="context-scrim"
+              className={`context-scrim${context.mobile ? " mobile-context-scrim" : ""}`}
               onClick={() => setContext(null)}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -2467,13 +2679,21 @@ export default function PlannerApp() {
               dayEvents={contextDayEvents}
               canPaste={!!clipboard.current}
               onClose={() => setContext(null)}
-              onEdit={() => editEvent(context.id)}
+              onEdit={() => { if (!context.fromEditor) editEvent(context.id); }}
               onToggle={() => model.toggleComplete(context.id)}
               onCopy={() => copyEvent(context.id)}
               onDuplicate={() => duplicateEvent(context.id)}
-              onDelete={() => model.deleteEvent(context.id)}
+              onDelete={() => {
+                if (context.mobile && model.settings.confirmBeforeDelete) {
+                  editEvent(context.id, null, { confirmDelete: true });
+                } else {
+                  model.deleteEvent(context.id);
+                  if (context.fromEditor) closeDraft();
+                }
+              }}
               onDeleteEvent={(id) => model.deleteEvent(id)}
               onDeleteDayEvents={(ids) => model.deleteEvent(ids)}
+              onShowDate={() => showDay(localDate(context.date))}
               onCreateHere={() => createAt(context)}
               onPasteHere={() => pasteTo(context.date, context.minutes)}
             />
