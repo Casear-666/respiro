@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { motion } from "framer-motion";
+import { isMobile } from "./repository";
 
 const GAP = 12,
   EDGE = 16;
@@ -34,7 +35,7 @@ export default function Dialog({
 }) {
   const ref = useRef(null),
     previousFocus = useRef(null);
-  const anchored = Boolean(anchor) && window.innerWidth > 680;
+  const anchored = !isMobile && Boolean(anchor) && window.innerWidth > 680;
   useLayoutEffect(() => {
     if (!anchored || !ref.current) return;
     place(ref.current, anchor);
@@ -47,13 +48,15 @@ export default function Dialog({
     const node = ref.current;
     const timer = setTimeout(() => {
       if (node.contains(document.activeElement)) return;
-      (
-        node.querySelector("[data-autofocus]") ||
-        node.querySelector('input:not([type="checkbox"])') ||
-        node.querySelector("button")
-      )?.focus();
+      const focusTarget = isMobile
+        ? node
+        : node.querySelector("[data-autofocus]") ||
+          node.querySelector('input:not([type="checkbox"])') ||
+          node.querySelector("button");
+      focusTarget?.focus({ preventScroll: true });
     }, 40);
     const onKey = (e) => {
+      if (isMobile && !node.contains(e.target)) return;
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
@@ -98,6 +101,7 @@ export default function Dialog({
         role="dialog"
         aria-modal="true"
         aria-label={label}
+        tabIndex={isMobile ? -1 : undefined}
         className={`planner-dialog ${className}`}
         initial={{ opacity: 0, y: anchored ? 0 : 14, scale: 0.96 }}
         animate={{

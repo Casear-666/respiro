@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useId, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ChevronRight, Plus } from "lucide-react";
+import { ChevronRight, ClipboardPaste, MoreHorizontal, Plus } from "lucide-react";
 import { addDays, categoryOf, dateKey, eventCognitiveInfo, eventOnDay, formatTime, localDate } from "../../shared/domain";
 
 export const DialContext =
@@ -39,7 +39,7 @@ function arcEnd(radius, from, length) {
 
 export function DayDial({ day, legend }) {
   const ctx = useContext(DialContext) || globalThis.__EC_DIAL_STATE__ || {};
-  const { events = [], onEdit, onCreate, onDelete, aiWeights, energyMode } = ctx;
+  const { events = [], onEdit, onCreate, onDelete, onEventActions, onPaste, aiWeights, energyMode } = ctx;
   const [hover, setHover] = useState(null);
   const [focus, setFocus] = useState(null);
   const [nowMinute, setNowMinute] = useState(() => {
@@ -102,6 +102,10 @@ export function DayDial({ day, legend }) {
     if (!onDelete || e.defaultPrevented) return;
     e.preventDefault();
     e.stopPropagation();
+    if (onEventActions) {
+      onEventActions(event.id);
+      return;
+    }
     setHover((cur) => (cur === event.id ? null : cur));
     setFocus((cur) => (cur === event.id ? null : cur));
     onDelete(event.id);
@@ -172,10 +176,11 @@ export function DayDial({ day, legend }) {
                     animate={{ pathLength: 1, opacity: active && active.id !== event.id ? 0.32 : 1 }}
                     exit={{ pathLength: 0, opacity: 0, pointerEvents: "none", transition: leave }}
                     transition={enter}
-                    onPointerEnter={() => setHover(event.id)} onPointerLeave={() => setHover(null)}
+                    onPointerEnter={(e) => { if (e.pointerType !== "touch") setHover(event.id); }}
+                    onPointerLeave={() => setHover(null)}
                     onClick={e => edit(event, e.currentTarget)}
                     onContextMenu={e => remove(event, e)}>
-                    <title>{event.title} · {range(event)}{onDelete ? " · 左键编辑，右键删除" : ""}</title>
+                    <title>{event.title} · {range(event)}{onEventActions ? " · 点按编辑" : onDelete ? " · 左键编辑，右键删除" : ""}</title>
                   </motion.path>
                 </g>
               );
@@ -227,7 +232,14 @@ export function DayDial({ day, legend }) {
       </div>
       <div className="dial-agenda">
         <header><h3>当日安排 <small>{entries.length} 项</small></h3>
-          {onCreate && <button className="dial-add" type="button" onClick={e => create(e.currentTarget)}><Plus size={15} /> 添加日程</button>}
+          <div className="agenda-actions">
+            {onPaste && (
+              <button className="icon-button" type="button" aria-label="粘贴到这一天" onClick={onPaste}>
+                <ClipboardPaste size={16} />
+              </button>
+            )}
+            {onCreate && <button className="dial-add" type="button" onClick={e => create(e.currentTarget)}><Plus size={15} /> 添加日程</button>}
+          </div>
         </header>
         <ul>
           <AnimatePresence initial={false} mode="popLayout">
@@ -237,10 +249,12 @@ export function DayDial({ day, legend }) {
               return (
               <motion.li key={event.id} layout={reduced ? false : "position"} initial={{ opacity: 0, y: reduced ? 0 : 8 }}
                 animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: reduced ? 0 : 14, pointerEvents: "none", transition: leave }} transition={enter}
+                className={onEventActions ? "dial-entry-row" : undefined}
                 onContextMenu={e => remove(event, e)}>
                 <button type="button" className="dial-entry" data-active={active?.id === event.id}
-                  title={onDelete ? "左键编辑，右键删除" : undefined}
-                  onPointerEnter={() => setHover(event.id)} onPointerLeave={() => setHover(null)}
+                  title={onEventActions ? undefined : onDelete ? "左键编辑，右键删除" : undefined}
+                  onPointerEnter={(e) => { if (e.pointerType !== "touch") setHover(event.id); }}
+                  onPointerLeave={() => setHover(null)}
                   onFocus={() => setFocus(event.id)} onBlur={() => setFocus(null)}
                   onClick={e => edit(event, e.currentTarget)}
                   onContextMenu={e => remove(event, e)}>
@@ -250,8 +264,20 @@ export function DayDial({ day, legend }) {
                       {cog.level.short}
                     </span>
                   )}
-                  {event.completed && <small>已完成</small>}<ChevronRight className="dial-chevron" size={14} aria-hidden="true" />
+                  {event.completed && <small>已完成</small>}
+                  {!onEventActions && <ChevronRight className="dial-chevron" size={14} aria-hidden="true" />}
                 </button>
+                {onEventActions && (
+                  <button
+                    type="button"
+                    className="icon-button mobile-event-actions"
+                    aria-label={`${event.title}的更多操作`}
+                    aria-haspopup="menu"
+                    onClick={() => onEventActions(event.id)}
+                  >
+                    <MoreHorizontal size={18} aria-hidden="true" />
+                  </button>
+                )}
               </motion.li>
               );
             })}

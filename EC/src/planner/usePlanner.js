@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { App as CapacitorApp } from "@capacitor/app";
 import { toast } from "sonner";
-import { repository, isDesktop, isServer } from "./repository";
+import { repository, isLocalApp, isMobile, isServer } from "./repository";
 import {
   COGNITIVE_LEVELS,
   DEFAULT_SETTINGS,
@@ -21,6 +22,7 @@ const DEFAULT_AI_CONFIG = {
   enabled: false,
   models: {},
 };
+const DISABLED_AI = { enabled: false, capabilities: {}, models: {} };
 const readAiConfig = () => {
   try {
     const raw = JSON.parse(localStorage.getItem(AI_CONFIG_KEY) || "null");
@@ -84,15 +86,11 @@ export function usePlanner() {
     undo: false,
     redo: false,
   });
-  const [aiStatus, setAiStatus] = useState({
-    enabled: false,
-    capabilities: {},
-    models: {},
-  });
-  const [aiConfig, setAiConfig] = useState(() => readAiConfig());
+  const [aiStatus, setAiStatus] = useState(DISABLED_AI);
+  const [aiConfig, setAiConfig] = useState(() => isMobile ? DEFAULT_AI_CONFIG : readAiConfig());
   const [serverWeights, setServerWeights] = useState({});
   const [weightOverrides, setWeightOverrides] = useState(() =>
-    readWeightOverrides(),
+    isMobile ? {} : readWeightOverrides(),
   );
   const [aiScoringIds, setAiScoringIds] = useState(() => new Set());
   const aiWeights = useMemo(
@@ -144,7 +142,7 @@ export function usePlanner() {
         mode: configRes.mode === "custom" ? "custom" : "shared",
       };
       setAiConfig(nextConfig);
-      writeAiConfig(nextConfig);
+      if (!isMobile) writeAiConfig(nextConfig);
     }
     if (statusRes && typeof statusRes === "object") {
       const nextStatus = {
@@ -155,9 +153,8 @@ export function usePlanner() {
       aiStatusRef.current = nextStatus;
       setAiStatus(nextStatus);
     } else {
-      const disabled = { enabled: false, capabilities: {}, models: {} };
-      aiStatusRef.current = disabled;
-      setAiStatus(disabled);
+      aiStatusRef.current = DISABLED_AI;
+      setAiStatus(DISABLED_AI);
     }
     if (
       weightsRes &&
@@ -181,11 +178,25 @@ export function usePlanner() {
     setLoading(true);
     setLoadError("");
     ready.current = false;
+    if (isMobile) {
+      aiStatusRef.current = DISABLED_AI;
+      setAiStatus(DISABLED_AI);
+      setAiConfig(DEFAULT_AI_CONFIG);
+      setServerWeights({});
+      setAiScoringIds(new Set());
+      inFlightWeightKeysRef.current.clear();
+      failedWeightKeysRef.current.clear();
+      scoredKeysRef.current.clear();
+      weightOverridesRef.current = {};
+      setWeightOverrides({});
+    }
     try {
-      const [list, preferences] = await Promise.all([
+      const [list, preferences, overrides] = await Promise.all([
         repository.list(),
         repository.getSettings(),
+        isMobile ? repository.getWeightOverrides() : null,
       ]);
+      if (seq !== loadSeq.current) return;
       const normalized = list.map(normalizeEvent);
       current.current = normalized;
       saved.current = normalized;
@@ -194,12 +205,16 @@ export function usePlanner() {
       failure.current = null; setStatus("saved");
       setEvents(normalized);
       setSettings(normalizeSettings(preferences));
+      if (overrides) {
+        weightOverridesRef.current = overrides;
+        setWeightOverrides(overrides);
+      }
       ready.current = true;
       loadAiState(normalized, seq);
     } catch (error) {
-      setLoadError(error.message);
+      if (seq === loadSeq.current) setLoadError(error.message);
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [loadAiState]);
   useEffect(() => {
@@ -254,15 +269,30 @@ export function usePlanner() {
     finally { refreshing.current = false; }
   }, []);
   useEffect(() => {
-    if (!isDesktop && !isServer) return;
+    if (!isLocalApp && !isServer) return;
     const timer = setInterval(refresh, 3000);
     const unsubscribe = repository.onChanged?.(refresh);
-    const wake = () => { repository.syncNow?.(); refresh(); };
-    window.addEventListener("online", wake); window.addEventListener("focus", wake);
-    return () => { clearInterval(timer); unsubscribe?.(); window.removeEventListener("online", wake); window.removeEventListener("focus", wake); };
+    const wake = () => {
+      repository.syncNow?.().catch(() => {});
+      refresh();
+    };
+    const appState = isMobile
+      ? CapacitorApp.addListener("appStateChange", ({ isActive }) => { if (isActive) wake(); })
+      : null;
+    appState?.catch(() => {});
+    window.addEventListener("online", wake);
+    window.addEventListener("focus", wake);
+    return () => {
+      clearInterval(timer);
+      unsubscribe?.();
+      appState?.then((handle) => handle.remove()).catch(() => {});
+      window.removeEventListener("online", wake);
+      window.removeEventListener("focus", wake);
+    };
   }, [refresh]);
   useEffect(() => {
-    const unsubscribe = window.energyCalendar?.onClosing(async () => {
+    if (isMobile) return;
+    const unsubscribe = repository.onClosing?.(async () => {
       try {
         await flush();
       } catch (error) {
@@ -341,6 +371,7 @@ export function usePlanner() {
       Array.isArray(targetEvents) ? targetEvents : [targetEvents]
     ).filter((e) => e && e.id && e.title);
     if (!list.length) return [];
+    const seq = loadSeq.current;
     const ids = list.map((e) => String(e.id));
     list.forEach((e) =>
       inFlightWeightKeysRef.current.set(String(e.id), eventWeightKey(e)),
@@ -366,6 +397,7 @@ export function usePlanner() {
           })),
           force,
         });
+        if (isMobile && seq !== loadSeq.current) return [];
         const items = Array.isArray(res?.weights) ? res.weights : [];
         if (items.length) {
           collected.push(...items);
@@ -385,17 +417,20 @@ export function usePlanner() {
       }
       return collected;
     } catch (error) {
+      if (isMobile && seq !== loadSeq.current) return [];
       for (const e of list) {
         failedWeightKeysRef.current.set(String(e.id), eventWeightKey(e));
       }
       throw error;
     } finally {
-      ids.forEach((id) => inFlightWeightKeysRef.current.delete(id));
-      setAiScoringIds((prev) => {
-        const next = new Set(prev);
-        ids.forEach((id) => next.delete(id));
-        return next;
-      });
+      if (!isMobile || seq === loadSeq.current) {
+        ids.forEach((id) => inFlightWeightKeysRef.current.delete(id));
+        setAiScoringIds((prev) => {
+          const next = new Set(prev);
+          ids.forEach((id) => next.delete(id));
+          return next;
+        });
+      }
     }
   }, []);
   useEffect(() => {
@@ -470,27 +505,41 @@ export function usePlanner() {
     },
     [commit, scoreEvents],
   );
+  const persistOverride = useCallback((id, record) => {
+    const update = () => {
+      const next = { ...weightOverridesRef.current };
+      if (record) next[id] = record;
+      else delete next[id];
+      weightOverridesRef.current = next;
+      setWeightOverrides(next);
+      if (!isMobile) writeWeightOverrides(next);
+    };
+    if (!isMobile) {
+      update();
+      return Promise.resolve(true);
+    }
+    if (demoRef.current) return Promise.resolve(false);
+    const seq = loadSeq.current;
+    const task = queue.current.then(async () => {
+      if (failure.current) throw failure.current;
+      if (seq !== loadSeq.current) return false;
+      await repository.setWeightOverride(id, record);
+      if (seq !== loadSeq.current) return false;
+      update();
+      return true;
+    }).catch((error) => {
+      toast.error("认知负荷设置未能保存", { description: error.message });
+      return false;
+    });
+    queue.current = task;
+    return task;
+  }, []);
   const setCognitiveOverride = useCallback(
     (eventId, score) => {
       if (!eventId) return;
       const id = String(eventId);
-      if (score == null) {
-        setWeightOverrides((prev) => {
-          if (!prev[id]) return prev;
-          const next = { ...prev };
-          delete next[id];
-          weightOverridesRef.current = next;
-          writeWeightOverrides(next);
-          return next;
-        });
-        const ev = current.current.find((e) => String(e.id) === id);
-        if (ev && aiStatusRef.current.enabled && !demoRef.current) {
-          scoreEvents([ev]).catch(() => {});
-        }
-        return;
-      }
-      const level = cognitiveLevelOf(score);
-      const record = {
+      const level = score == null ? null : cognitiveLevelOf(score);
+      const record = level && {
         id,
         score: level.score,
         expectedScore: level.score,
@@ -499,31 +548,23 @@ export function usePlanner() {
         manual: true,
         updatedAt: Date.now(),
       };
-      setWeightOverrides((prev) => {
-        const next = { ...prev, [id]: record };
-        weightOverridesRef.current = next;
-        writeWeightOverrides(next);
-        return next;
+      return persistOverride(id, record).then((persisted) => {
+        if (!persisted || record || !aiStatusRef.current.enabled || demoRef.current) return;
+        const event = current.current.find((item) => String(item.id) === id);
+        if (event) scoreEvents([event]).catch(() => {});
       });
     },
-    [scoreEvents],
+    [persistOverride, scoreEvents],
   );
   const rescoreEvent = useCallback(
     async (eventData) => {
       if (!eventData?.id) return null;
       const id = String(eventData.id);
-      setWeightOverrides((prev) => {
-        if (!prev[id]) return prev;
-        const next = { ...prev };
-        delete next[id];
-        weightOverridesRef.current = next;
-        writeWeightOverrides(next);
-        return next;
-      });
+      if (!(await persistOverride(id, null))) return null;
       const results = await scoreEvents([eventData], { force: true });
       return results[0] ?? null;
     },
-    [scoreEvents],
+    [persistOverride, scoreEvents],
   );
   const quickCapture = useCallback(async (payload, options) => {
     if (typeof repository.aiQuickCapture !== "function") {
@@ -608,7 +649,7 @@ export function usePlanner() {
     async (raw) => {
       try {
         await flush();
-        const result = isDesktop
+        const result = typeof repository.importBackup === "function"
           ? await repository.importBackup()
           : await repository.importText(raw);
         if (result.canceled) return;
@@ -630,7 +671,7 @@ export function usePlanner() {
     try {
       await flush();
       const result = await repository.exportBackup();
-      if (!result.canceled) toast.success("日历备份已导出");
+      if (!result.canceled) toast.success(isMobile ? "已打开备份分享" : "日历备份已导出");
     } catch (error) {
       toast.error("导出失败", { description: error.message });
     }
@@ -638,6 +679,7 @@ export function usePlanner() {
   const switchSpace = useCallback(async (operation) => {
     await flush();
     ready.current = false; setLoading(true); ++sequence.current;
+    if (isMobile) ++loadSeq.current;
     try { return await operation(); }
     finally { await load(); }
   }, [flush, load]);
@@ -670,7 +712,7 @@ export function usePlanner() {
         mode: res?.mode === "custom" ? "custom" : "shared",
       };
       setAiConfig(nextConfig);
-      writeAiConfig(nextConfig);
+      if (!isMobile) writeAiConfig(nextConfig);
       const nextStatus = {
         enabled: Boolean(nextConfig.enabled),
         capabilities: {

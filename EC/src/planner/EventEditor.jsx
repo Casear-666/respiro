@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { isMobile } from "./repository";
 import {
   ArrowRight,
   Check,
@@ -7,6 +8,7 @@ import {
   Clock3,
   Copy,
   CornerDownLeft,
+  MoreHorizontal,
   RotateCw,
   Sparkles,
   Tag,
@@ -51,6 +53,7 @@ export default function EventEditor({
   cognitiveWeight = null,
   onOverrideWeight,
   onRescoreWeight,
+  onActions,
 }) {
   const existing = draft.event;
   const initial =
@@ -180,6 +183,9 @@ export default function EventEditor({
     setStart(datetime(s));
     setEnd(datetime(new Date(+s + minutes * 60000)));
   };
+  useEffect(() => {
+    if (draft.confirmDelete) setConfirmDelete(true);
+  }, [draft]);
   const submit = (e) => {
     e.preventDefault();
     try {
@@ -196,12 +202,13 @@ export default function EventEditor({
         start: allDay ? enteredStart : localDate(enteredStart),
         end: allDay ? dateKey(addDays(enteredEnd, 1)) : localDate(enteredEnd),
       });
+      if (isMobile && !onSave(event)) return;
       if (manualScore != null) {
         onOverrideWeight?.(event.id, manualScore);
       } else if (editing && cognitiveWeight?.manual) {
         onOverrideWeight?.(event.id, null);
       }
-      onSave(event);
+      if (!isMobile) onSave(event);
       onClose();
     } catch (err) {
       setError(err.message);
@@ -249,7 +256,7 @@ export default function EventEditor({
               setError("");
             }}
             maxLength={200}
-            autoFocus
+            autoFocus={!isMobile}
             data-autofocus
           />
 
@@ -445,6 +452,17 @@ export default function EventEditor({
           <div className="editor-secondary">
             {editing ? (
               <>
+                {onActions && (
+                  <button
+                    type="button"
+                    className="icon-button mobile-event-actions"
+                    aria-label={`${existing.title}的更多操作`}
+                    aria-haspopup="menu"
+                    onClick={() => onActions(existing.id)}
+                  >
+                    <MoreHorizontal size={18} />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="icon-button danger-button"
@@ -475,7 +493,7 @@ export default function EventEditor({
                   <Copy size={16} />
                 </button>
               </>
-            ) : (
+            ) : !isMobile ? (
               <span className="subtle">
                 <kbd>{isMac ? "⌘" : "Ctrl"}</kbd>
                 <kbd>
@@ -483,7 +501,7 @@ export default function EventEditor({
                 </kbd>
                 保存
               </span>
-            )}
+            ) : null}
           </div>
           <div className="editor-primary">
             <button type="button" className="ghost-button" onClick={onClose}>

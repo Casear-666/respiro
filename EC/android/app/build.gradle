@@ -1,0 +1,66 @@
+apply plugin: 'com.android.application'
+
+def packageInfo = new groovy.json.JsonSlurper().parse(rootProject.file('../package.json'))
+def versionParts = packageInfo.version.tokenize('.').collect { it.toInteger() }
+def signing = ['CALENDAR_ANDROID_KEYSTORE', 'CALENDAR_ANDROID_STORE_PASSWORD',
+               'CALENDAR_ANDROID_KEY_ALIAS', 'CALENDAR_ANDROID_KEY_PASSWORD']
+    .collectEntries { [(it): System.getenv(it)] }
+def hasReleaseKey = signing.values().every { it }
+if (!hasReleaseKey && signing.values().any { it }) {
+    throw new GradleException('Supply all four CALENDAR_ANDROID signing variables.')
+}
+
+android {
+    namespace = "com.energycalendar.mobile"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.energycalendar.mobile"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode versionParts[0] * 1000000 + versionParts[1] * 1000 + versionParts[2]
+        versionName packageInfo.version
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    signingConfigs {
+        if (hasReleaseKey) {
+            release {
+                storeFile file(signing.CALENDAR_ANDROID_KEYSTORE)
+                storePassword signing.CALENDAR_ANDROID_STORE_PASSWORD
+                keyAlias signing.CALENDAR_ANDROID_KEY_ALIAS
+                keyPassword signing.CALENDAR_ANDROID_KEY_PASSWORD
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (hasReleaseKey) signingConfig signingConfigs.release
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'

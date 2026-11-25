@@ -73,6 +73,9 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
     onMove,
     onRange,
     onContext,
+    onShowDay,
+    onEventActions,
+    onPaste,
     aiWeights = null,
     energyMode = "density",
   },
@@ -84,6 +87,13 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
   onContextRef.current = onContext;
   const [gesture, setGesture] = useState("");
   const canvas = useRef(null);
+  const touchPress = useRef(null),
+    pressedDate = useRef(null);
+  const cancelTouchPress = useCallback(() => {
+    clearTimeout(touchPress.current?.timer);
+    touchPress.current = null;
+  }, []);
+  useEffect(() => cancelTouchPress, [cancelTouchPress, view]);
   const lastSelection = useRef(null);
   const selectedKey = dateKey(selectedDay);
   const monthStart = range?.currentStart;
@@ -680,6 +690,10 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
     );
   };
   const openSlotMenu = (e) => {
+    if (onShowDay) {
+      e.preventDefault();
+      return;
+    }
     if (e.target.closest(".fc-event")) return;
     const cell = e.target.closest("[data-date]");
     if (!cell) return;
@@ -710,9 +724,34 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
       events: dayEvents,
     });
   };
+  const beginTouchPress = (e) => {
+    if (!onShowDay || view !== "dayGridMonth" || e.pointerType !== "touch" || !e.isPrimary) return;
+    const cell = e.target.closest?.(".fc-daygrid-day[data-date]");
+    if (!cell) return;
+    const date = cell.dataset.date;
+    cancelTouchPress();
+    pressedDate.current = null;
+    touchPress.current = {
+      id: e.pointerId,
+      x: e.clientX,
+      y: e.clientY,
+      timer: setTimeout(() => {
+        pressedDate.current = { date, until: Date.now() + 1000 };
+        onDate(localDate(date));
+        onContext?.({ date, allDay: true, mobile: true });
+      }, 500),
+    };
+  };
+  const trackTouchPress = (e) => {
+    const press = touchPress.current;
+    if (press?.id === e.pointerId && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) {
+      cancelTouchPress();
+    }
+  };
+  const isPressedDate = (date) => pressedDate.current?.date === date && Date.now() < pressedDate.current.until;
   const dialContextValue = useMemo(
-    () => ({ events, onEdit, onCreate, onDelete, aiWeights, energyMode }),
-    [events, onEdit, onCreate, onDelete, aiWeights, energyMode],
+    () => ({ events, onEdit, onCreate, onDelete, onEventActions, onPaste, aiWeights, energyMode }),
+    [events, onEdit, onCreate, onDelete, onEventActions, onPaste, aiWeights, energyMode],
   );
   globalThis.__EC_DIAL_STATE__ = dialContextValue;
   const calendar = (
@@ -721,6 +760,10 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
       ref={canvas}
       data-heat-tween={HEAT_TWEEN ? "" : undefined}
       onContextMenu={openSlotMenu}
+      onPointerDown={beginTouchPress}
+      onPointerMove={trackTouchPress}
+      onPointerUp={cancelTouchPress}
+      onPointerCancel={cancelTouchPress}
       onPointerOver={overPreview}
       onPointerLeave={() => dwell.leave()}
       onFocus={focusPreview}
@@ -730,7 +773,7 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
       {gesture && (
         <div className="gesture-hint" role="status">
           {gesture}
-          <kbd>Esc 取消</kbd>
+          {!onShowDay && <kbd>Esc 取消</kbd>}
         </div>
       )}
       <DialContext.Provider value={dialContextValue}>
@@ -745,7 +788,7 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
         firstDay={settings.weekStart}
         weekends={settings.showWeekends}
         editable
-        selectable
+        selectable={!onShowDay || view === "timeGridWeek"}
         selectMirror
         selectMinDistance={5}
         eventDragMinDistance={6}
@@ -773,22 +816,28 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
           requestAnimationFrame(syncDayHeat);
         }}
         dayCellDidMount={(info) => styleDay(info.el, info.date)}
-        dayHeaderContent={(info) => (
-          <span className="weekday-heading">
-            <span>
-              {
-                ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][
-                  info.date.getDay()
-                ]
-              }
-            </span>
-            {info.view.type !== "dayGridMonth" && (
-              <strong className={info.isToday ? "is-today" : ""}>
-                {info.date.getDate()}
-              </strong>
-            )}
-          </span>
-        )}
+        dayHeaderContent={(info) => {
+          const weekday = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][info.date.getDay()];
+          const showNumber = info.view.type !== "dayGridMonth";
+          const heading = (
+            <>
+              <span>{weekday}</span>
+              {showNumber && (
+                <strong className={info.isToday ? "is-today" : ""}>{info.date.getDate()}</strong>
+              )}
+            </>
+          );
+          return onShowDay && showNumber ? (
+            <button
+              type="button"
+              className="weekday-heading touch-day-heading"
+              aria-label={`查看 ${dateKey(info.date)} 的日程`}
+              onClick={(e) => { e.stopPropagation(); onShowDay(info.date); }}
+            >
+              {heading}
+            </button>
+          ) : <span className="weekday-heading">{heading}</span>;
+        }}
         dayCellClassNames={(info) => [
           dateKey(info.date) === dateKey(selectedDay) ? "day-selected" : "",
           `energy-${loads(dateKey(info.date)).level}`,
@@ -809,7 +858,8 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
                 aria-label={`查看 ${key} 的日程${n ? `，${n} 项安排` : ""}`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onDate(info.date);
+                  if (isPressedDate(key)) return;
+                  (onShowDay || onDate)(info.date);
                 }}
                 className="day-number"
               >
@@ -838,6 +888,10 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
           );
         }}
         dateClick={(info) => {
+          if (onShowDay && info.view.type === "dayGridMonth") {
+            if (!isPressedDate(dateKey(info.date))) onShowDay(info.date);
+            return;
+          }
           onDate(info.date);
           onCreate({
             start: info.date,
@@ -879,16 +933,19 @@ const CalendarCanvas = forwardRef(function CalendarCanvas(
         }}
         eventResizeStop={endGesture}
         eventDidMount={(info) => {
-          info.el.title = `${info.event.title} · 点击编辑，右键删除，拖动改期`;
+          info.el.title = onShowDay
+            ? `${info.event.title} · 点按编辑，长按拖动改期`
+            : `${info.event.title} · 点击编辑，右键删除，拖动改期`;
           info.el.tabIndex = 0;
           info.el.setAttribute("role", "button");
           info.el.setAttribute(
             "aria-label",
-            `${info.event.title}，回车编辑，右键删除`,
+            `${info.event.title}，${onShowDay ? "点按编辑" : "回车编辑，右键删除"}`,
           );
           info.el.oncontextmenu = (e) => {
             e.preventDefault();
             e.stopPropagation();
+            if (onShowDay) return;
             if (onDeleteRef.current) onDeleteRef.current(info.event.id);
             else onContextRef.current?.({ id: info.event.id, x: e.clientX, y: e.clientY });
           };

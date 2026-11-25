@@ -1,0 +1,9 @@
+{
+  "appId": "com.energycalendar.mobile",
+  "appName": "精力日历",
+  "webDir": "dist-android",
+  "loggingBehavior": "none",
+  "server": {
+    "androidScheme": "https"
+  }
+}

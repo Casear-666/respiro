@@ -15,6 +15,11 @@
     "server": "node --env-file-if-exists=.env.server server/index.js",
     "server:create-user": "node --env-file-if-exists=.env.server server/create-user.js",
     "build": "node scripts/build-dial-demo.js && vite build",
+    "android:dev": "npm run android:sync && cap run android --no-sync",
+    "android:sync": "vite build --outDir dist-android && cap sync android",
+    "android:open": "cap open android",
+    "android:apk": "npm run android:sync && node scripts/build-android.js",
+    "android:bundle": "npm run android:sync && node scripts/build-android.js --bundle",
     "preview": "vite preview",
     "start:offline": "electron .",
     "test": "node --test tests/native/*.test.js",
@@ -27,6 +32,7 @@
     "desktop:sync-smoke": "node scripts/desktop-sync-smoke.js"
   },
   "devDependencies": {
+    "@capacitor/cli": "8.6.2",
     "@fontsource-variable/google-sans-flex": "^5.3.2",
     "@fontsource-variable/noto-sans-sc": "^5.3.1",
     "@fullcalendar/core": "^6.1.20",
@@ -76,5 +82,11 @@
       "deleteAppDataOnUninstall": false,
       "artifactName": "EnergyCalendar-${version}-Setup.${ext}"
     }
+  },
+  "dependencies": {
+    "@capacitor-community/sqlite": "8.1.1",
+    "@capacitor/android": "8.6.2",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.6.2"
   }
 }
